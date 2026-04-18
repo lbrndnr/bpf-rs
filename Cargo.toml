@@ -1,10 +1,12 @@
-[package]
-name = "bpf"
-version = "0.1.0"
-edition = "2024"
+[workspace]
+resolver = "2"
+members = ["bpf", "example"]
 
-[dependencies]
-bpf-tracing = { version = "0.0.3", optional = true }
-
-[features]
-tracing = ["dep: bpf-tracing"]
+[workspace.package]
+license = "GPL-3.0"
+authors = [
+    "lbrndnr <mail@laurinbrandner.ch>",
+]
+repository = "https://github.com/lbrndnr/bpf-rs"
+readme = "README.md"
+keywords = ["ebpf", "bpf", "libbpf"]
