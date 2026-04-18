@@ -1,0 +1,10 @@
+[package]
+name = "bpf"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bpf-tracing = { version = "0.0.3", optional = true }
+
+[features]
+tracing = ["dep: bpf-tracing"]
