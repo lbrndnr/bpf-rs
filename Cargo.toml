@@ -3,7 +3,7 @@ resolver = "2"
 members = ["bpf", "example"]
 
 [workspace.package]
-license = "GPL-3.0"
+license = "MIT"
 authors = [
     "lbrndnr <mail@laurinbrandner.ch>",
 ]
