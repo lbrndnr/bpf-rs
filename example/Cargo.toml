@@ -5,4 +5,12 @@ edition = "2024"
 publish = false
 
 [dependencies]
+anyhow = "1.0.102"
 bpf = { path = "../bpf" }
+bpf-tracing = "0.0.5"
+libbpf-rs = "0.26.2"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+[build-dependencies]
+bpf = { path = "../bpf" }
+bpf-tracing-include = { version = "0.0.5", features = ["source-loc"] }

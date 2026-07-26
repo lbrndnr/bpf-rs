@@ -84,6 +84,8 @@ impl Builder {
             .collect();
 
         for (file, name) in named_files {
+            println!("cargo:rerun-if-changed={}", file.display());
+
             let rel_dir = file
                 .parent()
                 .and_then(|dir| dir.strip_prefix("src").ok())
