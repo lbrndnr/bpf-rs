@@ -1,9 +1,11 @@
 use libbpf_cargo::SkeletonBuilder;
+use std::collections::HashMap;
+use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 
 /// Includes the generated skeleton for the eBPF program with the given name.
 #[macro_export]
-macro_rules! include_bpf_prog {
+macro_rules! include_bpf {
     ($name:literal) => {
         include!(concat!(env!("OUT_DIR"), "/", $name, ".skel.rs"));
     };
@@ -57,25 +59,69 @@ impl Builder {
         let Ok(files) = glob::glob(&self.pattern) else {
             panic!("Invalid eBPF glob pattern: {}", self.pattern);
         };
-        for file in files {
-            let Ok(file) = file else {
-                println!("cargo:warning=Failed to read eBPF source file: {:?}", file);
-                continue;
-            };
-            let Some(name) = file.file_prefix() else {
-                println!("cargo:warning=Invalid eBPF source file name: {:?}", file);
-                continue;
-            };
 
-            let out = out_dir
-                .clone()
-                .join(format!("{}.skel.rs", name.to_string_lossy()));
+        let files = files
+            .filter_map(|f| match f {
+                Ok(file) => Some(file),
+                Err(e) => {
+                    println!("cargo:warning=Failed to read eBPF source file: {:?}", e);
+                    None
+                }
+            })
+            .chain(self.sources.clone().into_iter());
+
+        let mut name_counts: HashMap<String, usize> = HashMap::new();
+        let named_files: Vec<(PathBuf, String)> = files
+            .filter_map(|file| {
+                let Some(name) = file.file_prefix() else {
+                    println!("cargo:warning=Invalid eBPF source file name: {:?}", file);
+                    return None;
+                };
+                let name = name.to_string_lossy().into_owned();
+                *name_counts.entry(name.clone()).or_insert(0) += 1;
+                Some((file, name))
+            })
+            .collect();
+
+        for (file, name) in named_files {
+            let rel_dir = file
+                .parent()
+                .and_then(|dir| dir.strip_prefix("src").ok())
+                .or_else(|| file.parent())
+                .unwrap_or_else(|| Path::new(""));
+            let out_subdir = out_dir.join(rel_dir);
+            if std::fs::create_dir_all(&out_subdir).is_err() {
+                panic!(
+                    "Failed to create output directory: {}",
+                    out_subdir.display()
+                );
+            }
+
+            let skel_name = format!("{}.skel.rs", name);
+            let out = out_subdir.join(&skel_name);
             let res = SkeletonBuilder::new()
                 .source(&file)
                 .clang_args(&self.clang_args)
                 .build_and_generate(&out);
             if res.is_err() {
                 panic!("Failed to compile eBPF source file: {:?}: {:?}", file, res);
+            }
+
+            if name_counts.get(&name) == Some(&1) && out_subdir != out_dir {
+                let link = out_dir.join(&skel_name);
+                if link.symlink_metadata().is_ok() {
+                    if let Err(e) = std::fs::remove_file(&link) {
+                        panic!("Failed to remove stale symlink {}: {}", link.display(), e);
+                    }
+                }
+                if let Err(e) = symlink(&out, &link) {
+                    println!(
+                        "cargo:warning=Failed to create symlink {} -> {}: {}",
+                        link.display(),
+                        out.display(),
+                        e
+                    );
+                }
             }
         }
     }
