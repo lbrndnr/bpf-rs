@@ -1,6 +1,14 @@
 use libbpf_cargo::SkeletonBuilder;
 use std::path::{Path, PathBuf};
 
+/// Includes the generated skeleton for the eBPF program with the given name.
+#[macro_export]
+macro_rules! include_bpf_prog {
+    ($name:literal) => {
+        include!(concat!(env!("OUT_DIR"), "/", $name, ".skel.rs"));
+    };
+}
+
 pub struct Builder {
     /// The glob pattern used to find source files.
     pattern: String,
@@ -59,7 +67,9 @@ impl Builder {
                 continue;
             };
 
-            let out = out_dir.clone().join(format!("{:?}.skel.rs", name));
+            let out = out_dir
+                .clone()
+                .join(format!("{}.skel.rs", name.to_string_lossy()));
             let res = SkeletonBuilder::new()
                 .source(&file)
                 .clang_args(&self.clang_args)
