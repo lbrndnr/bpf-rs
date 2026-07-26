@@ -11,6 +11,11 @@ keywords.workspace = true
 
 [dependencies]
 bpf-tracing = { version = "0.0.3", optional = true }
+glob = { version = "0.3.4", optional = true }
+libbpf-cargo = "0.26.2"
+libbpf-rs = "0.26.2"
 
 [features]
-tracing = ["dep: bpf-tracing"]
+default = ["build", "tracing"]
+build = ["dep:glob"]
+tracing = ["dep:bpf-tracing"]
