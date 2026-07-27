@@ -2,6 +2,7 @@ use libbpf_cargo::SkeletonBuilder;
 use std::{
     collections::HashMap,
     env,
+    ffi::{OsStr, OsString},
     os::unix::fs::symlink,
     path::{Path, PathBuf},
     process::Command,
@@ -23,7 +24,7 @@ pub struct Builder {
     sources: Vec<PathBuf>,
 
     /// Additional clang arguments that apply to all jobs.
-    clang_args: Vec<String>,
+    clang_args: Vec<OsString>,
 }
 
 impl Builder {
@@ -45,14 +46,20 @@ impl Builder {
         self
     }
 
-    pub fn clang_arg<A: AsRef<str>, CA: Iterator<Item = A>>(&mut self, args: CA) -> &mut Self {
+    pub fn clang_arg<A: AsRef<OsStr>, CA: Iterator<Item = A>>(&mut self, args: CA) -> &mut Self {
         self.clang_args
-            .extend(args.into_iter().map(|a| a.as_ref().to_string()));
+            .extend(args.into_iter().map(|a| a.as_ref().to_os_string()));
         self
     }
 
-    pub fn dump_kernel_btf<P: AsRef<Path>>(out: P) {
-        let out = out.as_ref();
+    pub fn dump_kernel_btf() -> OsString {
+        let out_dir = Builder::get_env_var("OUT_DIR");
+        let include_dir = out_dir.join("include");
+
+        let vmlinux_path = include_dir.join("vmlinux.h");
+        if vmlinux_path.exists() {
+            return include_dir.into_os_string();
+        }
 
         if Command::new("bpftool").arg("--version").output().is_err() {
             panic!("bpftool is required to dump kernel BTF but was not found on PATH");
@@ -76,12 +83,16 @@ impl Builder {
             );
         }
 
-        if let Some(parent) = out.parent() {
-            std::fs::create_dir_all(parent)
-                .unwrap_or_else(|e| panic!("Failed to create directory {}: {e}", parent.display()));
+        if std::fs::create_dir_all(&include_dir).is_err() {
+            panic!(
+                "Failed to create include directory: {}",
+                include_dir.display()
+            );
         }
-        std::fs::write(out, output.stdout)
-            .unwrap_or_else(|e| panic!("Failed to write {}: {e}", out.display()));
+
+        std::fs::write(&vmlinux_path, output.stdout)
+            .unwrap_or_else(|e| panic!("Failed to write {:?}: {e}", vmlinux_path));
+        include_dir.into_os_string()
     }
 
     fn path_relative_to_src(path: &Path) -> Option<&Path> {
@@ -94,9 +105,16 @@ impl Builder {
         None
     }
 
+    fn get_env_var(name: &str) -> PathBuf {
+        let Some(out_dir) = env::var_os(&name) else {
+            panic!("{name} must be set to compile eBPF programs.");
+        };
+        PathBuf::from(&out_dir)
+    }
+
     pub fn build(&self) {
-        let out_dir = get_env_var("OUT_DIR");
-        let manifest_dir = get_env_var("CARGO_MANIFEST_DIR");
+        let out_dir = Builder::get_env_var("OUT_DIR");
+        let manifest_dir = Builder::get_env_var("CARGO_MANIFEST_DIR");
 
         let pattern = PathBuf::from(&manifest_dir).join(&self.pattern);
         let Some(pattern) = pattern.to_str() else {
@@ -131,7 +149,7 @@ impl Builder {
             .collect();
 
         for (file, name) in named_files {
-            println!("cargo:rerun-if-changed={}", file.display());
+            println!("cargo:rerun-if-changed={:?}", file);
 
             let rel_dir = Builder::path_relative_to_src(&file).unwrap_or(Path::new(""));
             let out_subdir = out_dir.join(rel_dir);
@@ -157,15 +175,13 @@ impl Builder {
                 let link = out_dir.join(&skel_name);
                 if link.symlink_metadata().is_ok() {
                     if let Err(e) = std::fs::remove_file(&link) {
-                        panic!("Failed to remove stale symlink {}: {}", link.display(), e);
+                        panic!("Failed to remove stale symlink {:?}: {}", link, e);
                     }
                 }
                 if let Err(e) = symlink(&out, &link) {
                     println!(
-                        "cargo:warning=Failed to create symlink {} -> {}: {}",
-                        link.display(),
-                        out.display(),
-                        e
+                        "cargo:warning=Failed to create symlink {:?} -> {:?}: {}",
+                        link, out, e
                     );
                 }
             }
@@ -173,42 +189,12 @@ impl Builder {
     }
 }
 
-fn get_env_var(name: &str) -> PathBuf {
-    let Some(out_dir) = env::var_os(&name) else {
-        panic!("{name} must be set to compile eBPF programs.");
-    };
-    PathBuf::from(&out_dir)
-}
-
 pub fn build() {
-    let out_dir = get_env_var("OUT_DIR");
-    let include_dir = out_dir.join("include");
-
-    if std::fs::create_dir_all(&include_dir).is_err() {
-        panic!(
-            "Failed to create include directory: {}",
-            include_dir.display()
-        );
-    }
-
-    let vmlinux_path = include_dir.join("vmlinux.h");
-
-    if !vmlinux_path.exists() {
-        Builder::dump_kernel_btf(&vmlinux_path)
-    }
-
-    let mut clang_args = vec![
-        "-I".to_string(),
-        include_dir.as_os_str().to_string_lossy().into_owned(),
-    ];
+    let mut clang_args = vec![OsString::from("-I"), Builder::dump_kernel_btf()];
 
     if cfg!(feature = "tracing") {
         let tracing_args = bpf_tracing_include::clang_args_from_default_env();
-        clang_args.extend(
-            tracing_args
-                .into_iter()
-                .map(|a| a.to_string_lossy().into_owned()),
-        );
+        clang_args.extend(tracing_args.into_iter().map(|a| a.to_os_string()));
     }
 
     Builder::new().clang_arg(clang_args.into_iter()).build();
