@@ -25,7 +25,7 @@ pub struct Builder {
 impl Builder {
     pub fn new() -> Self {
         Self {
-            pattern: String::from("*.bpf.rs"),
+            pattern: String::from("src/**/*.bpf.c"),
             sources: Vec::new(),
             clang_args: Vec::new(),
         }
@@ -47,16 +47,32 @@ impl Builder {
         self
     }
 
+    fn path_relative_to_src(path: &Path) -> Option<&Path> {
+        let mut components = path.components();
+        for c in &mut components {
+            if c.as_os_str() == "src" {
+                return components.as_path().parent();
+            }
+        }
+        None
+    }
+
     pub fn build(&self) {
         let Some(out_dir) = std::env::var_os("OUT_DIR") else {
             panic!("OUT_DIR must be set to compile eBPF programs.");
         };
         let out_dir = PathBuf::from(&out_dir);
-        if std::fs::create_dir_all(&out_dir).is_err() {
-            panic!("Failed to create OUT_DIR: {}", out_dir.display());
-        }
 
-        let Ok(files) = glob::glob(&self.pattern) else {
+        let manifest_dir = std::env::var_os("CARGO_MANIFEST_DIR")
+            .expect("CARGO_MANIFEST_DIR must be set in build script");
+        let manifest_dir = PathBuf::from(&manifest_dir);
+
+        let pattern = PathBuf::from(&manifest_dir).join(&self.pattern);
+        let Some(pattern) = pattern.to_str() else {
+            panic!("Invalid eBPF glob pattern: {}", self.pattern);
+        };
+
+        let Ok(files) = glob::glob(pattern) else {
             panic!("Invalid eBPF glob pattern: {}", self.pattern);
         };
 
@@ -86,12 +102,9 @@ impl Builder {
         for (file, name) in named_files {
             println!("cargo:rerun-if-changed={}", file.display());
 
-            let rel_dir = file
-                .parent()
-                .and_then(|dir| dir.strip_prefix("src").ok())
-                .or_else(|| file.parent())
-                .unwrap_or_else(|| Path::new(""));
+            let rel_dir = Builder::path_relative_to_src(&file).unwrap_or(Path::new(""));
             let out_subdir = out_dir.join(rel_dir);
+
             if std::fs::create_dir_all(&out_subdir).is_err() {
                 panic!(
                     "Failed to create output directory: {}",
@@ -127,4 +140,21 @@ impl Builder {
             }
         }
     }
+}
+
+pub fn build() {
+    let include_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../example/include");
+
+    let mut clang_args = vec!["-I".to_string(), include_dir.to_string()];
+
+    if cfg!(feature = "tracing") {
+        let tracing_args = bpf_tracing_include::clang_args_from_default_env();
+        clang_args.extend(
+            tracing_args
+                .into_iter()
+                .map(|a| a.to_string_lossy().into_owned()),
+        );
+    }
+
+    Builder::new().clang_arg(clang_args.into_iter()).build();
 }
