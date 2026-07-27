@@ -1,7 +1,11 @@
 use libbpf_cargo::SkeletonBuilder;
-use std::collections::HashMap;
-use std::os::unix::fs::symlink;
-use std::path::{Path, PathBuf};
+use std::{
+    collections::HashMap,
+    env,
+    os::unix::fs::symlink,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 /// Includes the generated skeleton for the eBPF program with the given name.
 #[macro_export]
@@ -47,6 +51,39 @@ impl Builder {
         self
     }
 
+    pub fn dump_kernel_btf<P: AsRef<Path>>(out: P) {
+        let out = out.as_ref();
+
+        if Command::new("bpftool").arg("--version").output().is_err() {
+            panic!("bpftool is required to dump kernel BTF but was not found on PATH");
+        }
+
+        let output = Command::new("bpftool")
+            .args([
+                "btf",
+                "dump",
+                "file",
+                "/sys/kernel/btf/vmlinux",
+                "format",
+                "c",
+            ])
+            .output()
+            .unwrap_or_else(|e| panic!("Failed to run bpftool: {e}"));
+        if !output.status.success() {
+            panic!(
+                "bpftool btf dump failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+
+        if let Some(parent) = out.parent() {
+            std::fs::create_dir_all(parent)
+                .unwrap_or_else(|e| panic!("Failed to create directory {}: {e}", parent.display()));
+        }
+        std::fs::write(out, output.stdout)
+            .unwrap_or_else(|e| panic!("Failed to write {}: {e}", out.display()));
+    }
+
     fn path_relative_to_src(path: &Path) -> Option<&Path> {
         let mut components = path.components();
         for c in &mut components {
@@ -58,14 +95,8 @@ impl Builder {
     }
 
     pub fn build(&self) {
-        let Some(out_dir) = std::env::var_os("OUT_DIR") else {
-            panic!("OUT_DIR must be set to compile eBPF programs.");
-        };
-        let out_dir = PathBuf::from(&out_dir);
-
-        let manifest_dir = std::env::var_os("CARGO_MANIFEST_DIR")
-            .expect("CARGO_MANIFEST_DIR must be set in build script");
-        let manifest_dir = PathBuf::from(&manifest_dir);
+        let out_dir = get_env_var("OUT_DIR");
+        let manifest_dir = get_env_var("CARGO_MANIFEST_DIR");
 
         let pattern = PathBuf::from(&manifest_dir).join(&self.pattern);
         let Some(pattern) = pattern.to_str() else {
@@ -142,10 +173,34 @@ impl Builder {
     }
 }
 
-pub fn build() {
-    let include_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../example/include");
+fn get_env_var(name: &str) -> PathBuf {
+    let Some(out_dir) = env::var_os(&name) else {
+        panic!("{name} must be set to compile eBPF programs.");
+    };
+    PathBuf::from(&out_dir)
+}
 
-    let mut clang_args = vec!["-I".to_string(), include_dir.to_string()];
+pub fn build() {
+    let out_dir = get_env_var("OUT_DIR");
+    let include_dir = out_dir.join("include");
+
+    if std::fs::create_dir_all(&include_dir).is_err() {
+        panic!(
+            "Failed to create include directory: {}",
+            include_dir.display()
+        );
+    }
+
+    let vmlinux_path = include_dir.join("vmlinux.h");
+
+    if !vmlinux_path.exists() {
+        Builder::dump_kernel_btf(&vmlinux_path)
+    }
+
+    let mut clang_args = vec![
+        "-I".to_string(),
+        include_dir.as_os_str().to_string_lossy().into_owned(),
+    ];
 
     if cfg!(feature = "tracing") {
         let tracing_args = bpf_tracing_include::clang_args_from_default_env();
