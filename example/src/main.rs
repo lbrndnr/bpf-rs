@@ -1,6 +1,6 @@
 #![allow(unused_imports)]
 use anyhow::Result;
-use libbpf_rs::skel::{OpenSkel, Skel, SkelBuilder};
+use bpf::{OpenObject, Program, libbpf::skel::Skel};
 use std::{mem::MaybeUninit, thread::sleep, time::Duration};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -14,14 +14,12 @@ fn main() -> Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    let mut open_obj = MaybeUninit::uninit();
-    let skel_builder = SyscallTraceSkelBuilder::default();
-    let open_skel = skel_builder.open(&mut open_obj)?;
-    let skel = open_skel.load()?;
+    let mut open_obj = OpenObject::new();
+    let prog = Program::build(SyscallTraceSkelBuilder::default(), &mut open_obj)?;
 
-    bpf_tracing::try_init(skel.object())?;
+    bpf::tracing::try_init(prog.skel.object())?;
 
-    let _link = skel.progs.trace_syscall.attach()?;
+    let _link = prog.skel.progs.trace_syscall.attach()?;
 
     println!("Tracing syscalls... press Ctrl-C to stop.");
     loop {
