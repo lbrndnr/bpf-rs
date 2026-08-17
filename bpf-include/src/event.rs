@@ -70,7 +70,7 @@ impl TryFrom<&[u8]> for Event {
         let msg = parse_cstr(&buf[msg_start..msg_end], "msg")?;
 
         let has_file = buf.len() >= EVENT_WITH_FILE_SIZE;
-        if cfg!(feature = "source-loc") && !has_file {
+        if cfg!(feature = "tracing-source-loc") && !has_file {
             return Err(EventDecodeError::BufferTooShort {
                 expected: EVENT_WITH_FILE_SIZE,
                 actual: buf.len(),

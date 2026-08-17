@@ -129,7 +129,7 @@ pub fn clang_args(level: LevelFilter, ring_buf_size: Option<usize>) -> Vec<OsStr
     let log_level = format!("BPF_TRACING_LEVEL={log_level}");
     args.extend_from_slice(&[OsString::from("-D"), OsString::from(log_level)]);
 
-    if cfg!(feature = "source-loc") {
+    if cfg!(feature = "tracing-source-loc") {
         args.extend_from_slice(&[
             OsString::from("-D"),
             OsString::from("BPF_TRACING_SOURCE_LOC=1"),

@@ -29,3 +29,4 @@ tracing = "0.1.44"
 default = ["build", "tracing"]
 build = ["dep:glob"]
 tracing = []
+tracing-source-loc = ["bpf-include/tracing-source-loc"]

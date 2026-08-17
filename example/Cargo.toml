@@ -6,9 +6,9 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.102"
-bpf = { path = "../bpf" }
+bpf = { path = "../bpf", features = ["tracing-source-loc"]  }
 libbpf-rs = "0.26.2"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 
 [build-dependencies]
-bpf = { path = "../bpf" }
+bpf = { path = "../bpf", features = ["tracing-source-loc"] }
