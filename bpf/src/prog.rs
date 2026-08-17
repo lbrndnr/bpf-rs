@@ -33,6 +33,9 @@ impl<'obj, SB: SkelBuilder<'obj, Output = OS>, OS: OpenSkel<'obj, Output = S>, S
             skel,
         };
 
+        #[cfg(feature = "tracing")]
+        crate::tracing::try_init(prog.skel.object())?;
+
         Ok(prog)
     }
 }

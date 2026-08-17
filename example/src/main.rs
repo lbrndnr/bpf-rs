@@ -17,8 +17,6 @@ fn main() -> Result<()> {
     let mut open_obj = OpenObject::new();
     let prog = Program::build(SyscallTraceSkelBuilder::default(), &mut open_obj)?;
 
-    bpf::tracing::try_init(prog.skel.object())?;
-
     let _link = prog.skel.progs.trace_syscall.attach()?;
 
     println!("Tracing syscalls... press Ctrl-C to stop.");
