@@ -66,7 +66,7 @@ mod tests {
             let skel_builder = LoopSkelBuilder::default();
             let open_skel = skel_builder.open(&mut open_obj).expect("open skel");
             let skel = open_skel.load().expect("load skel");
-            bpf_tracing::try_init(skel.object()).expect("bpf-tracing init");
+            bpf::tracing::try_init(skel.object()).expect("bpf::tracing init");
 
             // `trace_loop` is a BPF_PROG_TYPE_SYSCALL program: it isn't
             // attached to anything, it's invoked directly via BPF_PROG_RUN.

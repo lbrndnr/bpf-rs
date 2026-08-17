@@ -34,7 +34,7 @@
 //! # let out = "out";
 //! # let src = "src";
 //! let mut args = vec![OsString::from("-I"), OsString::from("../include")];
-//! args.extend(bpf_tracing_include::clang_args_from_default_env());
+//! args.extend(bpf_include::clang_args_from_default_env(None));
 //!
 //! SkeletonBuilder::new()
 //!     .source(&src)
@@ -172,7 +172,7 @@ mod tests {
         let env_var = "RUST_LOG";
         let clang_args =
             temp_env::with_var(env_var, Some("trace,bpf=debug,other_target=warn"), || {
-                clang_args_from_default_env()
+                clang_args_from_default_env(None)
             });
 
         assert!(clang_args.contains(&OsString::from("BPF_TRACING_LEVEL=4")));

@@ -80,7 +80,7 @@
 //! let open_skel = skel_builder.open(&mut open_obj)?;
 //! let skel = open_skel.load()?;
 //!
-//! bpf_tracing::try_init(skel.object());
+//! bpf::tracing::try_init(skel.object());
 //! # Ok(())
 //! # }
 //! ```
