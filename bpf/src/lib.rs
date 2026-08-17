@@ -8,7 +8,7 @@ mod prog;
 pub use prog::Program;
 
 #[cfg(feature = "tracing")]
-pub extern crate bpf_tracing as tracing;
+pub mod tracing;
 
 #[cfg(feature = "build")]
 pub mod build;

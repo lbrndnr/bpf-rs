@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["bpf", "example"]
+members = ["bpf", "bpf-include", "example"]
 
 [workspace.package]
 license = "MIT"
