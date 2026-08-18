@@ -100,7 +100,7 @@ use std::{
     path::{Component, Path, PathBuf},
     thread::{self},
 };
-use tracing::{self, metadata::Metadata, span::EnteredSpan};
+use tracing::{self, metadata::Metadata, span::EnteredSpan, warn};
 
 const TARGET: &str = "bpf";
 
@@ -146,6 +146,9 @@ pub fn try_init(obj: &libbpf_rs::Object) -> libbpf_rs::Result<()> {
     let ringbuf = builder.build().unwrap();
 
     thread::spawn(move || {
+        // TODO: `RingBuffer` only borrows the fd of the map, so the handle has to be
+        // kept alive for as long as the ring buffer is polled.
+
         loop {
             if let Err(_) = ringbuf.poll(std::time::Duration::MAX) {
                 continue;
@@ -157,11 +160,14 @@ pub fn try_init(obj: &libbpf_rs::Object) -> libbpf_rs::Result<()> {
 }
 
 fn process(event: &[u8]) -> i32 {
-    let Ok(event) = Event::try_from(event) else {
-        return -1;
-    };
-
-    emit(event);
+    match Event::try_from(event) {
+        Ok(event) => emit(event),
+        Err(err) => {
+            // Returning a negative value here would abort the poll and drop the
+            // record anyway, so account for the loss and keep on reading.
+            warn!(target: TARGET, "Failed to decode event: {err}");
+        }
+    }
 
     0
 }
@@ -246,39 +252,47 @@ fn get_callsite(key: CallsiteKey) -> &'static Metadata<'static> {
 
 fn emit(event: Event) {
     let cpu = event.cpu;
-    SPANS.with_borrow_mut(|spans| match &event.kind {
-        Kind::Message(lvl) => {
-            if *lvl <= tracing::metadata::LevelFilter::current() {
-                let content = event.content.clone();
-                let meta = get_callsite(event.try_into().unwrap());
-                let parent = spans[cpu].back().and_then(|(_, p)| p.id());
-
-                tracing::Event::child_of(
-                    parent,
-                    meta,
-                    &tracing::valueset_all!(meta.fields(), "{}", content),
-                );
-            }
+    SPANS.with_borrow_mut(|spans| {
+        // `available_parallelism` only counts the CPUs this process may run on,
+        // which can be fewer than the ids the kernel reports events from.
+        if cpu >= spans.len() {
+            spans.resize_with(cpu + 1, VecDeque::new);
         }
-        Kind::StartSpan(lvl) => {
-            if *lvl <= tracing::metadata::LevelFilter::current() {
-                let content = event.content.clone();
-                let meta = get_callsite(event.try_into().unwrap());
-                let parent = spans[cpu].back().and_then(|(_, p)| p.id());
 
-                let span = tracing::Span::child_of(
-                    parent,
-                    meta,
-                    &tracing::valueset_all!(meta.fields(), "{}", content),
-                );
-                spans[cpu].push_back((content, span.entered()));
+        match &event.kind {
+            Kind::Message(lvl) => {
+                if *lvl <= tracing::metadata::LevelFilter::current() {
+                    let content = event.content.clone();
+                    let meta = get_callsite(event.try_into().unwrap());
+                    let parent = spans[cpu].back().and_then(|(_, p)| p.id());
+
+                    tracing::Event::child_of(
+                        parent,
+                        meta,
+                        &tracing::valueset_all!(meta.fields(), "{}", content),
+                    );
+                }
             }
-        }
-        Kind::EndSpan => {
-            let content = event.content;
-            while let Some((n, _)) = spans[cpu].pop_back() {
-                if n == content {
-                    break;
+            Kind::StartSpan(lvl) => {
+                if *lvl <= tracing::metadata::LevelFilter::current() {
+                    let content = event.content.clone();
+                    let meta = get_callsite(event.try_into().unwrap());
+                    let parent = spans[cpu].back().and_then(|(_, p)| p.id());
+
+                    let span = tracing::Span::child_of(
+                        parent,
+                        meta,
+                        &tracing::valueset_all!(meta.fields(), "{}", content),
+                    );
+                    spans[cpu].push_back((content, span.entered()));
+                }
+            }
+            Kind::EndSpan => {
+                let content = event.content;
+                while let Some((n, _)) = spans[cpu].pop_back() {
+                    if n == content {
+                        break;
+                    }
                 }
             }
         }

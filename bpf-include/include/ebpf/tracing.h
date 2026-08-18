@@ -4,14 +4,12 @@
 #include "vmlinux.h"
 #include <bpf/bpf_helpers.h>
 
-enum log_level {
-    BPF_TRACING_LEVEL_OFF=0,
-    BPF_TRACING_LEVEL_ERROR,
-    BPF_TRACING_LEVEL_WARN,
-    BPF_TRACING_LEVEL_INFO,
-    BPF_TRACING_LEVEL_DEBUG,
-    BPF_TRACING_LEVEL_TRACE,
-};
+#define BPF_TRACING_LEVEL_OFF   0
+#define BPF_TRACING_LEVEL_ERROR 1
+#define BPF_TRACING_LEVEL_WARN  2
+#define BPF_TRACING_LEVEL_INFO  3
+#define BPF_TRACING_LEVEL_DEBUG 4
+#define BPF_TRACING_LEVEL_TRACE 5
 
 #ifndef BPF_TRACING_LEVEL
     #define BPF_TRACING_LEVEL BPF_TRACING_LEVEL_OFF
@@ -55,7 +53,7 @@ struct bpf_tracing_event {
         }                                                             \
         event->level = (__u8)(lvl);                                   \
         event->kind = (__u8)(ty);                                     \
-        event->cpu = (__u16)(bpf_get_smp_processor_id);               \
+        event->cpu = (__u16)bpf_get_smp_processor_id();               \
         BPF_SNPRINTF(event->msg, BPF_TRACING_STR_LEN, fmt, ##__VA_ARGS__); \
         BPF_SNPRINTF(event->file, BPF_TRACING_STR_LEN, "%s", __FILE__);  \
         event->line = (__u32)__LINE__;                                \
@@ -65,7 +63,7 @@ struct bpf_tracing_event {
 struct bpf_tracing_event {
     __u8 level;
     __u8 kind;
-    __u16 _pad;
+    __u16 cpu;
     char msg[BPF_TRACING_STR_LEN];
 };
 
@@ -78,6 +76,7 @@ struct bpf_tracing_event {
         }                                                             \
         event->level = (__u8)(lvl);                                   \
         event->kind = (__u8)(ty);                                     \
+        event->cpu = (__u16)bpf_get_smp_processor_id();               \
         BPF_SNPRINTF(event->msg, BPF_TRACING_STR_LEN, fmt, ##__VA_ARGS__); \
         bpf_ringbuf_submit(event, 0);                                 \
     } while (0)

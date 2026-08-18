@@ -5,7 +5,9 @@
 //! should be sufficient to compile `bpf-tracing`. You can
 //! customize the ring buffer used to copy the tracing events to
 //! user space with the following clang arguments:
-//! `BPF_TRACING_RINGBUF_SIZE`: determines the size of the ring buffer in bytes, default is 1000.
+//! `BPF_TRACING_RINGBUF_SIZE`: determines the size of the ring buffer in bytes, default is 8192.
+//! It must be a power of two multiple of the page size. Events that arrive while the ring
+//! buffer is full are dropped, so size it to fit the largest expected burst.
 //! `BPF_TRACING_STR_LEN`: determines the maximum string length for tracing events, default is 128.
 //! # Example
 //!
@@ -96,6 +98,7 @@ fn level_from_env(env_var: &str) -> LevelFilter {
 /// environment variable.
 #[inline]
 pub fn clang_args_from_default_env(ring_buf_size: Option<usize>) -> Vec<OsString> {
+    println!("cargo:rerun-if-env-changed={}", EnvFilter::DEFAULT_ENV);
     let level = level_from_env(EnvFilter::DEFAULT_ENV);
 
     clang_args(level, ring_buf_size)
@@ -149,7 +152,7 @@ pub fn clang_args(level: LevelFilter, ring_buf_size: Option<usize>) -> Vec<OsStr
 #[inline]
 pub fn include_path_root() -> OsString {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("include");
-    println!("cargo:rerun-if-changed={:?}", path);
+    println!("cargo:rerun-if-changed={}", path.display());
     OsString::from(path)
 }
 

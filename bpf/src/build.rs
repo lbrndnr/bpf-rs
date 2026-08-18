@@ -149,7 +149,7 @@ impl Builder {
             .collect();
 
         for (file, name) in named_files {
-            println!("cargo:rerun-if-changed={:?}", file);
+            println!("cargo:rerun-if-changed={}", file.display());
 
             let rel_dir = Builder::path_relative_to_src(&file).unwrap_or(Path::new(""));
             let out_subdir = out_dir.join(rel_dir);

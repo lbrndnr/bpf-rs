@@ -64,6 +64,7 @@ impl TryFrom<&[u8]> for Event {
 
         let level_raw = buf[0];
         let kind_raw = buf[1];
+        let cpu = u16::from_ne_bytes([buf[2], buf[3]]) as usize;
 
         let msg_start = 4;
         let msg_end = msg_start + BPF_TRACING_STR_LEN;
@@ -104,7 +105,7 @@ impl TryFrom<&[u8]> for Event {
         Ok(Event {
             kind,
             content: msg,
-            cpu: 0,
+            cpu,
             file,
             line,
         })
