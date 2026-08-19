@@ -80,6 +80,9 @@ pub struct Builder {
     /// The directory generated files are written to, `OUT_DIR` if unset.
     out_dir: Option<PathBuf>,
 
+    /// The directory the `vmlinux.h` header is dumped to, [`out_dir`] or `OUT_DIR/../../../../include` if unset.
+    vmlinux_dump_dir: Option<PathBuf>,
+
     /// The tracing level to compile with, derived from `RUST_LOG` if unset.
     #[cfg(feature = "tracing")]
     tracing_level: Option<LevelFilter>,
@@ -100,6 +103,7 @@ impl Builder {
             sources: Vec::new(),
             clang_args: Vec::new(),
             out_dir: None,
+            vmlinux_dump_dir: None,
             #[cfg(feature = "tracing")]
             tracing_level: None,
             #[cfg(feature = "tracing")]
@@ -131,6 +135,16 @@ impl Builder {
     /// outside of a build script, such as tests, have to set it explicitly.
     pub fn out_dir<P: AsRef<Path>>(&mut self, dir: P) -> &mut Self {
         self.out_dir = Some(dir.as_ref().to_path_buf());
+        self
+    }
+
+    /// Sets the directory that the `vmlinux.h` header is dumped to.
+    ///
+    /// Defaults to [`out_dir`] if set, and `OUT_DIR/../../../../include` otherwise.
+    /// Setting an explicit directory other than `OUT_DIR` is convenient,
+    /// as this allows users to configure their IDE with a `.clangd` file.
+    pub fn vmlinux_dump_dir<P: AsRef<Path>>(&mut self, dir: P) -> &mut Self {
+        self.vmlinux_dump_dir = Some(dir.as_ref().to_path_buf());
         self
     }
 
@@ -175,10 +189,29 @@ impl Builder {
         }
     }
 
+    /// Returns the directory the vmlinux.h header is dumped to.
+    fn resolved_vmlinux_dump_dir(&self) -> PathBuf {
+        match &self.vmlinux_dump_dir {
+            Some(dir) => dir.clone(),
+            None => {
+                if let Some(out_dir) = self.out_dir.clone() {
+                    out_dir
+                } else {
+                    self.resolved_out_dir()
+                        .join("..")
+                        .join("..")
+                        .join("..")
+                        .join("..")
+                        .join("include")
+                }
+            }
+        }
+    }
+
     /// Returns every clang argument a job is compiled with, including the ones
     /// needed to find the kernel BTF and the xBPF headers.
     fn all_clang_args(&self) -> Vec<OsString> {
-        let btf_include = dump_kernel_btf(self.resolved_out_dir().join("include"));
+        let btf_include = dump_kernel_btf(self.resolved_vmlinux_dump_dir());
         let mut args = vec![OsString::from("-I"), btf_include.into_os_string()];
 
         #[cfg(feature = "tracing")]
@@ -360,6 +393,8 @@ pub fn build() {
 pub fn dump_kernel_btf<P: AsRef<Path>>(dir: P) -> PathBuf {
     let dir = dir.as_ref().to_path_buf();
     let vmlinux_path = dir.join("vmlinux.h");
+
+    // TODO: can we validate whether the existing vmlinux.h is up to date with the running kernel?
     if vmlinux_path.exists() {
         return dir;
     }
