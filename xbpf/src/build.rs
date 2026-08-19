@@ -134,6 +134,11 @@ impl Builder {
         self
     }
 
+    /// Returns the directory generated files are written to.
+    fn get_out_dir(&self) -> PathBuf {
+        self.out_dir.clone().unwrap_or_else(|| env_out_dir())
+    }
+
     /// Sets the tracing level the eBPF programs are compiled with.
     ///
     /// Defaults to the level that `RUST_LOG` resolves to for the `bpf` target.
@@ -159,26 +164,10 @@ impl Builder {
         self
     }
 
-    /// Returns the directory generated files are written to.
-    fn resolved_out_dir(&self) -> PathBuf {
-        match &self.out_dir {
-            Some(dir) => dir.clone(),
-            None => {
-                let Some(dir) = env::var_os("OUT_DIR") else {
-                    panic!(
-                        "OUT_DIR must be set to compile eBPF programs. Call `out_dir` when \
-                         building outside of a build script."
-                    );
-                };
-                PathBuf::from(dir)
-            }
-        }
-    }
-
     /// Returns every clang argument a job is compiled with, including the ones
     /// needed to find the kernel BTF and the xBPF headers.
     fn all_clang_args(&self) -> Vec<OsString> {
-        let btf_include = dump_kernel_btf(self.resolved_out_dir());
+        let btf_include = dump_kernel_btf(self.get_out_dir());
         let mut args = vec![OsString::from("-I"), btf_include.into_os_string()];
 
         #[cfg(feature = "tracing")]
@@ -266,7 +255,7 @@ impl Builder {
     /// the layout the source file has below `src`.
     fn out_subdir(&self, file: &Path) -> PathBuf {
         let rel_dir = Builder::path_relative_to_src(file).unwrap_or(Path::new(""));
-        let out_subdir = self.resolved_out_dir().join(rel_dir);
+        let out_subdir = self.get_out_dir().join(rel_dir);
 
         if std::fs::create_dir_all(&out_subdir).is_err() {
             panic!(
@@ -308,44 +297,22 @@ impl Builder {
     }
 
     /// Exports the generated headers to a directory
-    /// Defaults to [`Builder::out_dir`] if set, and `OUT_DIR/../../../../include` otherwise.
+    /// Defaults to [`Builder::out_dir`] if set, and [`crate::default_header_dir`] otherwise.
     pub fn export_headers(&self) -> &Self {
         let dir = if let Some(out_dir) = self.out_dir.clone() {
             out_dir
         } else {
-            self.resolved_out_dir()
-                .join("..")
-                .join("..")
-                .join("..")
-                .join("..")
-                .join("include")
+            default_header_dir()
         };
 
-        self.export_headers_to(dir);
-        self
-    }
-
-    /// Exports headers to a known directory to configure the IDEs
-    /// LSP functionality with.
-    ///
-    /// This writes the kernel BTF as a `vmlinux.h` into `dir` along with every
-    /// header of [`include_path_root`], so that a single include path is enough
-    /// to resolve what an eBPF source file includes.
-    ///
-    /// Setting an explicit directory is convenient,
-    /// as this allows users to configure their IDE with a `.clangd` file.
-    pub fn export_headers_to<P: AsRef<Path>>(&self, dir: P) -> &Self {
-        let dir = dir.as_ref();
-        dump_kernel_btf(dir);
-        copy_dir(&include_path_root(), dir);
-
+        export_headers(None, dir);
         self
     }
 
     /// Compiles every source file and generates a skeleton for it that
     /// [`crate::include_bpf`] can include.
     pub fn build(&self) {
-        let out_dir = self.resolved_out_dir();
+        let out_dir = self.get_out_dir();
         let clang_args = self.all_clang_args();
         let (named_files, name_counts) = self.named_sources();
 
@@ -387,6 +354,27 @@ impl Builder {
 /// IDE.
 pub fn build() {
     Builder::new().export_headers().build();
+}
+
+/// Exports xBPF headers and additional headers `hdrs` in to a known directory
+/// to configure the IDEs LSP functionality with.
+///
+/// This writes the kernel BTF as a `vmlinux.h` into `dir` along with every
+/// header of [`include_path_root`], so that a single include path is enough
+/// to resolve what an eBPF source file includes.
+///
+/// Setting an explicit directory is convenient,
+/// as this allows users to configure their IDE with a `.clangd` file.
+pub fn export_headers<P: AsRef<Path>>(hdrs: Option<Vec<P>>, dst: P) {
+    let dst = dst.as_ref();
+    dump_kernel_btf(dst);
+    copy_dir(&include_path_root(), dst);
+
+    if let Some(srcs) = hdrs {
+        for src in srcs {
+            copy_dir(&src.as_ref(), dst);
+        }
+    }
 }
 
 /// Dumps the BTF of the running kernel as a `vmlinux.h` header into `dir` and
@@ -586,6 +574,28 @@ pub fn tracing_str_len_args(len: usize) -> [OsString; 2] {
 #[inline]
 pub fn include_path_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("include")
+}
+
+/// Returns the `OUT_DIR`, or panics if it is not set.
+fn env_out_dir() -> PathBuf {
+    let Some(dir) = env::var_os("OUT_DIR") else {
+        panic!(
+            "OUT_DIR must be set to compile eBPF programs. Call `out_dir` when \
+             building outside of a build script."
+        );
+    };
+    PathBuf::from(dir)
+}
+
+/// Returns the default directory to export the xBPF headers to.
+/// Defaults to `OUT_DIR/../../../../include`
+pub fn default_header_dir() -> PathBuf {
+    env_out_dir()
+        .join("..")
+        .join("..")
+        .join("..")
+        .join("..")
+        .join("include")
 }
 
 #[cfg(test)]
