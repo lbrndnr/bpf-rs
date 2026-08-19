@@ -9,6 +9,7 @@
 //!
 //! ```no_run
 //! # use std::mem::MaybeUninit;
+//! # use xbpf::libbpf;
 //! # mod tracing_subscriber {
 //! #     pub struct Fmt;
 //! #     pub struct EnvFilter;
@@ -50,24 +51,24 @@
 //! # }
 //! #
 //! # impl SkelBuilder {
-//! #     fn open(&self, _open_obj: &mut MaybeUninit<()>) -> libbpf_rs::Result<OpenSkel> {
+//! #     fn open(&self, _open_obj: &mut MaybeUninit<()>) -> libbpf::Result<OpenSkel> {
 //! #         unimplemented!()
 //! #     }
 //! # }
 //! #
 //! # impl OpenSkel {
-//! #     fn load(self) -> libbpf_rs::Result<Skel> {
+//! #     fn load(self) -> libbpf::Result<Skel> {
 //! #         unimplemented!()
 //! #     }
 //! # }
 //! #
 //! # impl Skel {
-//! #     fn object(&self) -> &libbpf_rs::Object {
+//! #     fn object(&self) -> &libbpf::Object {
 //! #         unimplemented!()
 //! #     }
 //! # }
 //! #
-//! # fn main() -> libbpf_rs::Result<()> {
+//! # fn main() -> libbpf::Result<()> {
 //!
 //! tracing_subscriber::fmt()
 //!     .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
@@ -92,15 +93,17 @@
 //! ```
 //!
 //! [`tracing`]: https://github.com/tokio-rs/tracing
-use crate::event::{CallsiteKey, Event, Kind};
-use libbpf_rs::{MapCore, MapHandle};
+use crate::{
+    event::{CallsiteKey, Event, Kind},
+    libbpf::{self, MapCore, MapHandle, PrintLevel},
+};
 use std::{
     cell::RefCell,
     collections::{HashMap, VecDeque},
     path::{Component, Path, PathBuf},
     thread::{self},
 };
-use tracing::{self, metadata::Metadata, span::EnteredSpan, warn};
+use tracing::{self, metadata::Metadata, span::EnteredSpan};
 
 const TARGET: &str = "bpf";
 
@@ -118,14 +121,29 @@ thread_local! {
     };
 }
 
+/// Callback for libbpf to print messages to the tracing infrastructure.
+fn print(level: libbpf::PrintLevel, msg: String) {
+    let msg = msg.trim_start_matches("libbpf:").trim();
+
+    match level {
+        PrintLevel::Debug => tracing::debug!(target: "libbpf", "{}", msg),
+        PrintLevel::Info => tracing::info!(target: "libbpf", "{}", msg),
+        PrintLevel::Warn => tracing::warn!(target: "libbpf", "{}", msg),
+    }
+}
+
 /// Initializes a ring buffer reader that continuously observes and
 /// emits tracing events.
 ///
 /// # Errors
 /// Returns an Error if the `trace_pipe` file cannot be opened
 /// or found.
-pub fn try_init(obj: &libbpf_rs::Object) -> libbpf_rs::Result<()> {
-    let mut builder = libbpf_rs::RingBufferBuilder::new();
+pub fn try_init(obj: &libbpf::Object) -> libbpf::Result<()> {
+    if libbpf::get_print().is_none() {
+        libbpf::set_print(Some((PrintLevel::Debug, print)));
+    }
+
+    let mut builder = libbpf::RingBufferBuilder::new();
     let mut events: Option<MapHandle> = None;
 
     for map in obj.maps() {
@@ -136,7 +154,7 @@ pub fn try_init(obj: &libbpf_rs::Object) -> libbpf_rs::Result<()> {
     }
 
     let Some(events) = events else {
-        return Err(libbpf_rs::Error::from(std::io::Error::new(
+        return Err(libbpf::Error::from(std::io::Error::new(
             std::io::ErrorKind::NotFound,
             "event ring buffer not found",
         )));
@@ -165,7 +183,7 @@ fn process(event: &[u8]) -> i32 {
         Err(err) => {
             // Returning a negative value here would abort the poll and drop the
             // record anyway, so account for the loss and keep on reading.
-            warn!(target: TARGET, "Failed to decode event: {err}");
+            tracing::warn!(target: TARGET, "Failed to decode event: {err}");
         }
     }
 
