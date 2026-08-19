@@ -2,7 +2,6 @@
 // `xbpf::tracing` emits, so they need both features.
 #![cfg(all(feature = "build", feature = "tracing"))]
 
-use libbpf_rs::{ObjectBuilder, ProgramInput};
 use std::{
     io::Write,
     path::{Path, PathBuf},
@@ -11,7 +10,10 @@ use std::{
 };
 use tracing::{Level, level_filters::LevelFilter};
 use tracing_subscriber::fmt::MakeWriter;
-use xbpf::build::Builder;
+use xbpf::{
+    build::Builder,
+    libbpf::{ObjectBuilder, ProgramInput},
+};
 
 /// A `tracing_subscriber` writer that buffers everything in memory instead
 /// of writing to stdout/stderr, so tests can inspect what was logged.
