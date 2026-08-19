@@ -21,6 +21,8 @@
 //! are decoded whenever the record is long enough to hold them, so a program
 //! compiled with source locations can be read by a user space program that was
 //! not, but not the other way around.
+
+use crate::map::FromRecord;
 use std::{error::Error, fmt};
 
 use tracing::Level;
@@ -205,6 +207,14 @@ impl TryFrom<&[u8]> for Event {
             file,
             line,
         })
+    }
+}
+
+impl FromRecord for Event {
+    type Error = EventDecodeError;
+
+    fn from_record(record: &[u8]) -> Result<Self, Self::Error> {
+        Event::try_from(record)
     }
 }
 

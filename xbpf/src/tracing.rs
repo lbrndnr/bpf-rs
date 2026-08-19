@@ -46,6 +46,7 @@
 use crate::{
     event::{CallsiteKey, Event, Kind},
     libbpf::{self, MapCore, MapHandle, PrintLevel},
+    map::RingBuf,
 };
 use std::{
     cell::RefCell,
@@ -58,6 +59,11 @@ use tracing::{self, metadata::Metadata, span::EnteredSpan};
 /// The [`tracing`] target every event from an eBPF program is emitted under,
 /// so that `RUST_LOG=bpf=debug` filters them as a group.
 const TARGET: &str = "bpf";
+
+/// How many events are buffered in user space before they are dropped. The
+/// events are small, so this is generous enough to absorb a burst that the
+/// eBPF ring buffer cannot hold on its own.
+const USERSPACE_CAPACITY: usize = 16 * 1024;
 
 /// The spans that are currently open, as a stack per CPU.
 ///
@@ -117,7 +123,6 @@ pub fn try_init(obj: &libbpf::Object) -> libbpf::Result<()> {
         libbpf::set_print(Some((PrintLevel::Debug, print)));
     }
 
-    let mut builder = libbpf::RingBufferBuilder::new();
     let mut events: Option<MapHandle> = None;
 
     for map in obj.maps() {
@@ -134,16 +139,15 @@ pub fn try_init(obj: &libbpf::Object) -> libbpf::Result<()> {
         )));
     };
 
-    builder.add(&events, |ev| process(ev)).unwrap();
-    let ringbuf = builder.build().unwrap();
+    let mut ring_buf: RingBuf<Event> = RingBuf::new(events, USERSPACE_CAPACITY)?;
 
+    // A single long lived thread, so that the per CPU span stacks and the
+    // callsite cache, which are thread local, stay consistent across events.
     thread::spawn(move || {
-        // TODO: `RingBuffer` only borrows the fd of the map, so the handle has to be
-        // kept alive for as long as the ring buffer is polled.
-
-        loop {
-            if let Err(_) = ringbuf.poll(std::time::Duration::MAX) {
-                continue;
+        while let Some(event) = ring_buf.blocking_recv() {
+            match event {
+                Ok(event) => emit(event),
+                Err(err) => tracing::warn!(target: TARGET, "Failed to decode event: {err}"),
             }
         }
     });
