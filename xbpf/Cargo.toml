@@ -1,8 +1,8 @@
 [package]
-name = "bpf"
+name = "xbpf"
 version = "0.0.1"
 edition = "2024"
-description = "An eBPF library"
+description = "An ergonomic and light-weight eBPF library"
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
@@ -10,7 +10,7 @@ readme.workspace = true
 keywords.workspace = true
 
 [dependencies]
-bpf-include = { path = "../bpf-include" }
+xbpf-include = { path = "../xbpf-include" }
 glob = { version = "0.3.4", optional = true }
 libbpf-cargo = "0.26.2"
 libbpf-rs = "0.26.2"
@@ -21,7 +21,7 @@ tempfile = "3.27.0"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 
 [build-dependencies]
-bpf-include = { path = "../bpf-include" }
+xbpf-include = { path = "../xbpf-include" }
 libbpf-cargo = "0.26.2"
 tracing = "0.1.44"
 
@@ -29,4 +29,4 @@ tracing = "0.1.44"
 default = ["build", "tracing"]
 build = ["dep:glob"]
 tracing = []
-tracing-source-loc = ["bpf-include/tracing-source-loc"]
+tracing-source-loc = ["xbpf-include/tracing-source-loc"]

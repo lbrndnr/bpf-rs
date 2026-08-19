@@ -1,10 +1,10 @@
 #![allow(unused_imports)]
 use anyhow::Result;
-use bpf::{OpenObject, Program, libbpf::skel::Skel};
 use std::{mem::MaybeUninit, thread::sleep, time::Duration};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use xbpf::{OpenObject, Program, libbpf::skel::Skel};
 
-bpf::include_bpf!("syscall_trace");
+xbpf::include_bpf!("syscall_trace");
 
 fn main() -> Result<()> {
     tracing_subscriber::fmt()

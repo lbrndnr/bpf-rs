@@ -1,12 +1,12 @@
 [workspace]
 resolver = "2"
-members = ["bpf", "bpf-include", "example"]
+members = ["xbpf", "xbpf-include", "example"]
 
 [workspace.package]
 license = "MIT"
 authors = [
     "lbrndnr <mail@laurinbrandner.ch>",
 ]
-repository = "https://github.com/lbrndnr/bpf-rs"
+repository = "https://github.com/lbrndnr/bpf"
 readme = "README.md"
 keywords = ["ebpf", "bpf", "libbpf"]

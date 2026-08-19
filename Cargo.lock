@@ -89,28 +89,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c4512299f36f043ab09a583e57bceb5a5aab7a73db1805848e8fef3c9e8c78b3"
 
 [[package]]
-name = "bpf"
-version = "0.0.1"
-dependencies = [
- "bpf-include",
- "glob",
- "libbpf-cargo",
- "libbpf-rs",
- "tempfile",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "bpf-include"
-version = "0.0.6"
-dependencies = [
- "temp-env",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "bumpalo"
 version = "3.20.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -254,9 +232,9 @@ name = "example"
 version = "0.0.1"
 dependencies = [
  "anyhow",
- "bpf",
  "libbpf-rs",
  "tracing-subscriber",
+ "xbpf",
 ]
 
 [[package]]
@@ -1142,6 +1120,28 @@ dependencies = [
  "serde_json",
  "unicode-xid",
  "wasmparser",
+]
+
+[[package]]
+name = "xbpf"
+version = "0.0.1"
+dependencies = [
+ "glob",
+ "libbpf-cargo",
+ "libbpf-rs",
+ "tempfile",
+ "tracing",
+ "tracing-subscriber",
+ "xbpf-include",
+]
+
+[[package]]
+name = "xbpf-include"
+version = "0.0.1"
+dependencies = [
+ "temp-env",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

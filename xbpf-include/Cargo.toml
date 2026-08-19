@@ -1,8 +1,8 @@
 [package]
-name = "bpf-include"
-version = "0.0.6"
+name = "xbpf-include"
+version = "0.0.1"
 edition = "2024"
-description = "The C headers for eBPF"
+description = "The C headers for xBPF"
 license.workspace = true
 authors.workspace = true
 repository.workspace = true

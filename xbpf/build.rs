@@ -16,7 +16,7 @@ fn main() {
     let out = out_dir.join("loop.skel.rs");
 
     let mut args = vec![OsString::from("-I"), OsString::from("../include")];
-    args.extend(bpf_include::clang_args(LevelFilter::DEBUG, None));
+    args.extend(xbpf_include::clang_args(LevelFilter::DEBUG, None));
 
     SkeletonBuilder::new()
         .source(&src)

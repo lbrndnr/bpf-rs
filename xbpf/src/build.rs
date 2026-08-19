@@ -193,7 +193,7 @@ pub fn build() {
     let mut clang_args = vec![OsString::from("-I"), Builder::dump_kernel_btf()];
 
     if cfg!(feature = "tracing") {
-        let tracing_args = bpf_include::clang_args_from_default_env(None);
+        let tracing_args = xbpf_include::clang_args_from_default_env(None);
         clang_args.extend(tracing_args.into_iter().map(|a| a.to_os_string()));
     }
 

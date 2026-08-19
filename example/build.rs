@@ -1,3 +1,3 @@
 fn main() {
-    bpf::build();
+    xbpf::build();
 }

@@ -92,7 +92,6 @@
 //! ```
 //!
 //! [`tracing`]: https://github.com/tokio-rs/tracing
-use bpf_include::event::{CallsiteKey, Event, Kind};
 use libbpf_rs::{MapCore, MapHandle};
 use std::{
     cell::RefCell,
@@ -101,6 +100,7 @@ use std::{
     thread::{self},
 };
 use tracing::{self, metadata::Metadata, span::EnteredSpan, warn};
+use xbpf_include::event::{CallsiteKey, Event, Kind};
 
 const TARGET: &str = "bpf";
 
