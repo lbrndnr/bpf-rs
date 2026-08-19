@@ -1,95 +1,45 @@
 //! Rich and event-based diagnostic information for eBPF.
 //!
-//! It exports a set of macros that can be used to emit
-//! diagnostic events from eBPF programs. The events are
-//! efficiently copied to user space via a ring buffer
-//! and integrated into the [`tracing`] infrastructure.
+//! The `xbpf.h` header exports a set of macros that emit diagnostic events from
+//! an eBPF program. The events are copied to user space through a ring buffer
+//! and re-emitted here as ordinary [`tracing`] events, so they show up in
+//! whatever subscriber the program already installed, nested in spans and
+//! filtered by level like any other event.
 //!
-//! # Example
+//! Which macros compile to anything is decided when the eBPF program is built,
+//! because tracing is expensive in eBPF. See [`mod@crate::build`] for that, and
+//! [`crate::event`] for the wire format in between.
+//!
+//! [`crate::Program::build`] calls [`try_init`] itself, so this module only has
+//! to be driven directly when an object is loaded some other way.
+//!
+//! # Examples
 //!
 //! ```no_run
-//! # use std::mem::MaybeUninit;
-//! # use xbpf::libbpf;
-//! # mod tracing_subscriber {
-//! #     pub struct Fmt;
-//! #     pub struct EnvFilter;
-//! #
-//! #     pub fn fmt() -> Fmt {
-//! #         Fmt
-//! #     }
-//! #
-//! #     impl EnvFilter {
-//! #         pub fn from_default_env() -> Self {
-//! #             EnvFilter
-//! #         }
-//! #     }
-//! #
-//! #     impl Fmt {
-//! #         pub fn with_env_filter(self, _filter: EnvFilter) -> Self {
-//! #             self
-//! #         }
-//! #
-//! #         pub fn with_file(self, _with_file: bool) -> Self {
-//! #             self
-//! #         }
-//! #
-//! #         pub fn with_line_number(self, _with_line_number: bool) -> Self {
-//! #             self
-//! #         }
-//! #
-//! #         pub fn init(self) {}
-//! #     }
-//! # }
-//! # struct SkelBuilder;
-//! # struct OpenSkel;
-//! # struct Skel;
-//! #
-//! # impl Default for SkelBuilder {
-//! #     fn default() -> Self {
-//! #         Self
-//! #     }
-//! # }
-//! #
-//! # impl SkelBuilder {
-//! #     fn open(&self, _open_obj: &mut MaybeUninit<()>) -> libbpf::Result<OpenSkel> {
-//! #         unimplemented!()
-//! #     }
-//! # }
-//! #
-//! # impl OpenSkel {
-//! #     fn load(self) -> libbpf::Result<Skel> {
-//! #         unimplemented!()
-//! #     }
-//! # }
-//! #
-//! # impl Skel {
-//! #     fn object(&self) -> &libbpf::Object {
-//! #         unimplemented!()
-//! #     }
-//! # }
-//! #
-//! # fn main() -> libbpf::Result<()> {
+//! use xbpf::libbpf::ObjectBuilder;
 //!
+//! # fn main() -> xbpf::libbpf::Result<()> {
 //! tracing_subscriber::fmt()
 //!     .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
 //!     .with_file(true)
 //!     .with_line_number(true)
 //!     .init();
 //!
-//! let mut open_obj = MaybeUninit::uninit();
-//! let skel_builder = SkelBuilder::default();
-//! let open_skel = skel_builder.open(&mut open_obj)?;
-//! let skel = open_skel.load()?;
+//! let obj = ObjectBuilder::default()
+//!     .open_file("syscall_trace.bpf.o")?
+//!     .load()?;
 //!
-//! xbpf::tracing::try_init(skel.object());
+//! xbpf::tracing::try_init(&obj)?;
 //! # Ok(())
 //! # }
 //! ```
 //!
-//! And in your eBPF program:
+//! And in the eBPF program:
 //!
 //! ```custom,{.language-c}
+//! bpf_start_info_span("sockops");
 //! bpf_info("Established socket [%pI4:%u->%pI4:%u]", &skey.local.ip4, skey.local.port, &skey.remote.ip4, skey.remote.port);
+//! bpf_end_span("sockops");
 //! ```
 //!
 //! [`tracing`]: https://github.com/tokio-rs/tracing
@@ -105,10 +55,18 @@ use std::{
 };
 use tracing::{self, metadata::Metadata, span::EnteredSpan};
 
+/// The [`tracing`] target every event from an eBPF program is emitted under,
+/// so that `RUST_LOG=bpf=debug` filters them as a group.
 const TARGET: &str = "bpf";
 
+/// The spans that are currently open, as a stack per CPU.
+///
+/// Each entry pairs the name a span was opened with, which is what
+/// [`Kind::EndSpan`] matches on, with the guard that keeps it entered.
 type Spans = Vec<VecDeque<(String, EnteredSpan)>>;
 
+// Both of these are thread local because the ring buffer is polled from a
+// single thread, so nothing else ever touches them.
 thread_local! {
     static CALLSITES: RefCell<HashMap<CallsiteKey, &'static Metadata<'static>>> = RefCell::new(HashMap::new());
     static SPANS: RefCell<Spans> = {
@@ -132,12 +90,28 @@ fn print(level: libbpf::PrintLevel, msg: String) {
     }
 }
 
-/// Initializes a ring buffer reader that continuously observes and
-/// emits tracing events.
+/// Starts reading the events of `obj` and emitting them as [`tracing`] events.
+///
+/// This spawns a thread that polls the `bpf_tracing_events` ring buffer of the
+/// object for as long as the process lives. It also installs [`print`] as the
+/// libbpf print callback, unless one is already set, so that libbpf's own
+/// messages end up in the same place under the `libbpf` target.
+///
+/// [`crate::Program::build`] calls this, so it only has to be called directly
+/// for objects that were loaded some other way.
 ///
 /// # Errors
-/// Returns an Error if the `trace_pipe` file cannot be opened
-/// or found.
+///
+/// Returns an error if `obj` has no `bpf_tracing_events` ring buffer, which is
+/// the case for programs that don't include `xbpf.h`, or if querying that map
+/// fails.
+///
+/// # Panics
+///
+/// Panics if the ring buffer cannot be set up, for instance because the map is
+/// not of type `BPF_MAP_TYPE_RINGBUF`.
+///
+/// [`tracing`]: https://github.com/tokio-rs/tracing
 pub fn try_init(obj: &libbpf::Object) -> libbpf::Result<()> {
     if libbpf::get_print().is_none() {
         libbpf::set_print(Some((PrintLevel::Debug, print)));
@@ -177,6 +151,10 @@ pub fn try_init(obj: &libbpf::Object) -> libbpf::Result<()> {
     Ok(())
 }
 
+/// Decodes and emits one record of the ring buffer.
+///
+/// Always returns 0 to keep the poll going, since the callback has no way to
+/// ask for the record to be retried.
 fn process(event: &[u8]) -> i32 {
     match Event::try_from(event) {
         Ok(event) => emit(event),
@@ -190,6 +168,11 @@ fn process(event: &[u8]) -> i32 {
     0
 }
 
+/// Returns `full` without the leading components it shares with `base`.
+///
+/// The eBPF side records `__FILE__` as it was passed to clang, which is an
+/// absolute path. Dropping the part that the crate root also has makes the
+/// logged location match how the file is written in the source tree.
 fn strip_matching_prefix_components(full: &Path, base: &Path) -> PathBuf {
     let mut full_it = full.components().peekable();
     let mut base_it = base.components().peekable();
@@ -216,6 +199,12 @@ fn strip_matching_prefix_components(full: &Path, base: &Path) -> PathBuf {
     out
 }
 
+/// Returns the callsite for `key`, creating and leaking it on first use.
+///
+/// [`tracing`] requires the metadata of a callsite to live for `'static`, which
+/// events decoded at run time cannot satisfy on their own. There is one
+/// callsite per distinct [`CallsiteKey`], so the number that can be leaked is
+/// bounded by the number of tracing macros in the eBPF program.
 fn get_callsite(key: CallsiteKey) -> &'static Metadata<'static> {
     CALLSITES.with_borrow_mut(|cs| {
         if let Some(meta) = cs.get(&key) {
@@ -268,6 +257,12 @@ fn get_callsite(key: CallsiteKey) -> &'static Metadata<'static> {
     })
 }
 
+/// Emits `event` as a [`tracing`] event, nested in the spans that are open on
+/// the CPU it came from.
+///
+/// A [`Kind::EndSpan`] closes the innermost span whose name matches, along with
+/// every span opened inside it, so that a span whose end was dropped by a full
+/// ring buffer doesn't stay open forever.
 fn emit(event: Event) {
     let cpu = event.cpu;
     SPANS.with_borrow_mut(|spans| {

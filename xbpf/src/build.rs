@@ -60,6 +60,20 @@ use tracing::{Dispatch, Level, Metadata, level_filters::LevelFilter};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, registry::Registry};
 
 /// Includes the generated skeleton for the eBPF program with the given name.
+///
+/// The name is the file name of the eBPF source without its extensions, so
+/// `src/syscall_trace.bpf.c` is included as `syscall_trace`. Expanding this
+/// brings the `SkelBuilder`, `OpenSkel` and `Skel` types [`crate::Program`]
+/// needs into scope.
+///
+/// ```custom,{.language-rust}
+/// xbpf::include_bpf!("syscall_trace");
+/// ```
+///
+/// # Panics
+///
+/// Fails to compile if no skeleton of that name was generated into `OUT_DIR`,
+/// which means the build script didn't call [`build`] or [`Builder::build`].
 #[macro_export]
 macro_rules! include_bpf {
     ($name:literal) => {
@@ -67,6 +81,23 @@ macro_rules! include_bpf {
     };
 }
 
+/// A configurable build of the eBPF sources of a crate.
+///
+/// This is what [`build`] uses underneath, for the cases where its defaults
+/// don't fit: another set of source files, extra clang arguments, an explicit
+/// output directory, or different tracing settings. Nothing is compiled until
+/// [`Builder::build`] or [`Builder::build_objects`] is called.
+///
+/// # Examples
+///
+/// ```no_run
+/// use xbpf::build::Builder;
+///
+/// Builder::new()
+///     .source("src/bpf/syscall_trace.bpf.c")
+///     .clang_arg(["-DMAX_ENTRIES=1024"].iter())
+///     .build();
+/// ```
 pub struct Builder {
     /// The glob pattern used to find source files.
     pattern: String,
@@ -94,6 +125,7 @@ pub struct Builder {
 }
 
 impl Builder {
+    /// Creates a builder that compiles every `*.bpf.c` file below `src`.
     pub fn new() -> Self {
         Self {
             pattern: String::from("src/**/*.bpf.c"),
@@ -109,16 +141,33 @@ impl Builder {
         }
     }
 
+    /// Replaces the glob pattern with every file below `src` whose name ends in
+    /// `suffix`.
+    ///
+    /// This is the default pattern with a different suffix, so passing `bpf.c`
+    /// restores it. Sources outside of `src` have to be added with
+    /// [`Builder::source`].
     pub fn sources_with_suffix<S: ToString>(&mut self, suffix: S) -> &mut Self {
-        self.pattern = format!("*.{}", suffix.to_string());
+        self.pattern = format!("src/**/*.{}", suffix.to_string());
         self
     }
 
+    /// Adds a source file to compile, on top of the ones the glob pattern
+    /// matches.
+    ///
+    /// The pattern is resolved against the crate root, which is only known
+    /// inside a build script, so explicitly added sources are all a caller
+    /// outside of one can build.
     pub fn source<P: AsRef<Path>>(&mut self, file: P) -> &mut Self {
         self.sources.push(file.as_ref().to_path_buf());
         self
     }
 
+    /// Adds clang arguments that every source file is compiled with.
+    ///
+    /// These come after the arguments xBPF passes itself, so they can override
+    /// them. The include paths of the kernel BTF and of the xBPF headers are
+    /// always passed and don't have to be repeated here.
     pub fn clang_arg<A: AsRef<OsStr>, CA: Iterator<Item = A>>(&mut self, args: CA) -> &mut Self {
         self.clang_args
             .extend(args.into_iter().map(|a| a.as_ref().to_os_string()));
@@ -190,6 +239,8 @@ impl Builder {
         args
     }
 
+    /// Returns the directory of `path` relative to the first `src` component
+    /// in it, or [`None`] if it has none.
     fn path_relative_to_src(path: &Path) -> Option<&Path> {
         let mut components = path.components();
         for c in &mut components {
@@ -272,6 +323,11 @@ impl Builder {
     /// Unlike [`Builder::build`] this doesn't generate skeletons, so the
     /// objects have to be loaded at run time, for instance with
     /// [`crate::libbpf::ObjectBuilder`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if the glob pattern is invalid, if a source file fails to
+    /// compile, or if the output directory cannot be created.
     pub fn build_objects(&self) -> Vec<PathBuf> {
         let clang_args = self.all_clang_args();
         let (named_files, _) = self.named_sources();
@@ -296,8 +352,11 @@ impl Builder {
             .collect()
     }
 
-    /// Exports the generated headers to a directory
-    /// Defaults to [`Builder::out_dir`] if set, and [`crate::default_header_dir`] otherwise.
+    /// Exports the xBPF headers so that an IDE can resolve them.
+    ///
+    /// They are written to [`Builder::out_dir`] if it is set, and to
+    /// [`default_header_dir`] otherwise. See [`export_headers`] for what ends
+    /// up there.
     pub fn export_headers(&self) -> &Self {
         let dir = if let Some(out_dir) = self.out_dir.clone() {
             out_dir
@@ -311,6 +370,16 @@ impl Builder {
 
     /// Compiles every source file and generates a skeleton for it that
     /// [`crate::include_bpf`] can include.
+    ///
+    /// Artifacts mirror the layout their source has below `src`. A skeleton
+    /// whose name is unambiguous is additionally symlinked into the root of the
+    /// output directory, so that [`crate::include_bpf`] can find it by name
+    /// alone.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the glob pattern is invalid, if a source file fails to
+    /// compile, or if the output directory cannot be created.
     pub fn build(&self) {
         let out_dir = self.get_out_dir();
         let clang_args = self.all_clang_args();
@@ -349,22 +418,40 @@ impl Builder {
 }
 
 /// Compiles every `*.bpf.c` file below `src` and generates a skeleton for it
-/// that [`crate::include_bpf`] can include. See [`Builder`] for more control.
-/// Additionally, this function conveniently exports the xBPF headers for your
-/// IDE.
+/// that [`crate::include_bpf`] can include.
+///
+/// This also exports the xBPF headers to [`default_header_dir`], so that an IDE
+/// can be pointed at a single include path. See [`Builder`] for more control.
+///
+/// # Examples
+///
+/// ```no_run
+/// // build.rs
+/// fn main() {
+///     xbpf::build();
+/// }
+/// ```
+///
+/// # Panics
+///
+/// Panics if a source file fails to compile, or if `OUT_DIR` is not set, which
+/// is the case outside of a build script.
 pub fn build() {
     Builder::new().export_headers().build();
 }
 
-/// Exports xBPF headers and additional headers `hdrs` in to a known directory
-/// to configure the IDEs LSP functionality with.
+/// Exports the xBPF headers, along with the additional headers `hdrs`, into
+/// `dst`.
 ///
-/// This writes the kernel BTF as a `vmlinux.h` into `dir` along with every
-/// header of [`include_path_root`], so that a single include path is enough
-/// to resolve what an eBPF source file includes.
+/// This writes the kernel BTF as a `vmlinux.h` into `dst` along with every
+/// header of [`include_path_root`], so that a single include path is enough to
+/// resolve what an eBPF source file includes. Pointing an IDE at a directory of
+/// its own, rather than at `OUT_DIR`, keeps that path stable enough to write
+/// into a `.clangd` file.
 ///
-/// Setting an explicit directory is convenient,
-/// as this allows users to configure their IDE with a `.clangd` file.
+/// # Panics
+///
+/// Panics if `bpftool` is missing or fails, or if `dst` cannot be written to.
 pub fn export_headers<P: AsRef<Path>>(hdrs: Option<Vec<P>>, dst: P) {
     let dst = dst.as_ref();
     dump_kernel_btf(dst);
@@ -380,8 +467,12 @@ pub fn export_headers<P: AsRef<Path>>(hdrs: Option<Vec<P>>, dst: P) {
 /// Dumps the BTF of the running kernel as a `vmlinux.h` header into `dir` and
 /// returns `dir`, so that it can be passed to clang as an include path.
 ///
-/// Dumping is skipped if the header already exists. Requires `bpftool` on
-/// `PATH`.
+/// Dumping is skipped if the header already exists.
+///
+/// # Panics
+///
+/// Panics if `bpftool` is not on `PATH`, if dumping the BTF fails, or if the
+/// header cannot be written.
 pub fn dump_kernel_btf<P: AsRef<Path>>(dir: P) -> PathBuf {
     let dir = dir.as_ref().to_path_buf();
     let vmlinux_path = dir.join("vmlinux.h");
@@ -587,8 +678,15 @@ fn env_out_dir() -> PathBuf {
     PathBuf::from(dir)
 }
 
-/// Returns the default directory to export the xBPF headers to.
-/// Defaults to `OUT_DIR/../../../../include`
+/// Returns the directory the xBPF headers are exported to by default.
+///
+/// This resolves to the `include` directory next to the profile directories of
+/// the target directory, typically `target/include`, so that it is shared by
+/// every crate of a workspace and survives a change of profile.
+///
+/// # Panics
+///
+/// Panics if `OUT_DIR` is not set, which is the case outside of a build script.
 pub fn default_header_dir() -> PathBuf {
     env_out_dir()
         .join("..")
@@ -601,6 +699,16 @@ pub fn default_header_dir() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sources_with_suffix_matches_default_pattern() {
+        let mut builder = Builder::new();
+        let default = builder.pattern.clone();
+
+        builder.sources_with_suffix("bpf.c");
+
+        assert_eq!(builder.pattern, default);
+    }
 
     #[test]
     fn parse_rich_env_var() {
