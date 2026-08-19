@@ -4,7 +4,7 @@
 //! Most of the time [`build`] is enough: it compiles every `*.bpf.c` file
 //! below `src` and generates a skeleton for it that [`crate::include_bpf`]
 //! can include. [`Builder`] offers the same with more control, and
-//! [`clang_args_from_default_env`] returns just the clang arguments needed
+//! [`tracing_clang_args_from_default_env`] returns just the clang arguments needed
 //! to compile a program that uses [`crate::tracing`].
 //!
 //! How the tracing events are copied to user space can be customized with
@@ -39,7 +39,7 @@
 //! # let out = "out";
 //! # let src = "src";
 //! let mut args = vec![OsString::from("-I"), OsString::from("../include")];
-//! args.extend(xbpf::build::clang_args_from_default_env());
+//! args.extend(xbpf::build::tracing_clang_args_from_default_env());
 //!
 //! SkeletonBuilder::new()
 //!     .source(&src)
@@ -80,9 +80,6 @@ pub struct Builder {
     /// The directory generated files are written to, `OUT_DIR` if unset.
     out_dir: Option<PathBuf>,
 
-    /// The directory the `vmlinux.h` header is dumped to, [`out_dir`] or `OUT_DIR/../../../../include` if unset.
-    vmlinux_dump_dir: Option<PathBuf>,
-
     /// The tracing level to compile with, derived from `RUST_LOG` if unset.
     #[cfg(feature = "tracing")]
     tracing_level: Option<LevelFilter>,
@@ -103,7 +100,6 @@ impl Builder {
             sources: Vec::new(),
             clang_args: Vec::new(),
             out_dir: None,
-            vmlinux_dump_dir: None,
             #[cfg(feature = "tracing")]
             tracing_level: None,
             #[cfg(feature = "tracing")]
@@ -135,16 +131,6 @@ impl Builder {
     /// outside of a build script, such as tests, have to set it explicitly.
     pub fn out_dir<P: AsRef<Path>>(&mut self, dir: P) -> &mut Self {
         self.out_dir = Some(dir.as_ref().to_path_buf());
-        self
-    }
-
-    /// Sets the directory that the `vmlinux.h` header is dumped to.
-    ///
-    /// Defaults to [`out_dir`] if set, and `OUT_DIR/../../../../include` otherwise.
-    /// Setting an explicit directory other than `OUT_DIR` is convenient,
-    /// as this allows users to configure their IDE with a `.clangd` file.
-    pub fn vmlinux_dump_dir<P: AsRef<Path>>(&mut self, dir: P) -> &mut Self {
-        self.vmlinux_dump_dir = Some(dir.as_ref().to_path_buf());
         self
     }
 
@@ -189,36 +175,17 @@ impl Builder {
         }
     }
 
-    /// Returns the directory the vmlinux.h header is dumped to.
-    fn resolved_vmlinux_dump_dir(&self) -> PathBuf {
-        match &self.vmlinux_dump_dir {
-            Some(dir) => dir.clone(),
-            None => {
-                if let Some(out_dir) = self.out_dir.clone() {
-                    out_dir
-                } else {
-                    self.resolved_out_dir()
-                        .join("..")
-                        .join("..")
-                        .join("..")
-                        .join("..")
-                        .join("include")
-                }
-            }
-        }
-    }
-
     /// Returns every clang argument a job is compiled with, including the ones
     /// needed to find the kernel BTF and the xBPF headers.
     fn all_clang_args(&self) -> Vec<OsString> {
-        let btf_include = dump_kernel_btf(self.resolved_vmlinux_dump_dir());
+        let btf_include = dump_kernel_btf(self.resolved_out_dir());
         let mut args = vec![OsString::from("-I"), btf_include.into_os_string()];
 
         #[cfg(feature = "tracing")]
         {
             args.extend(match self.tracing_level {
-                Some(level) => clang_args(level),
-                None => clang_args_from_default_env(),
+                Some(level) => tracing_clang_args(level),
+                None => tracing_clang_args_from_default_env(),
             });
 
             if let Some(size) = self.tracing_ring_buf_size {
@@ -340,6 +307,41 @@ impl Builder {
             .collect()
     }
 
+    /// Exports the generated headers to a directory
+    /// Defaults to [`Builder::out_dir`] if set, and `OUT_DIR/../../../../include` otherwise.
+    pub fn export_headers(&self) -> &Self {
+        let dir = if let Some(out_dir) = self.out_dir.clone() {
+            out_dir
+        } else {
+            self.resolved_out_dir()
+                .join("..")
+                .join("..")
+                .join("..")
+                .join("..")
+                .join("include")
+        };
+
+        self.export_headers_to(dir);
+        self
+    }
+
+    /// Exports headers to a known directory to configure the IDEs
+    /// LSP functionality with.
+    ///
+    /// This writes the kernel BTF as a `vmlinux.h` into `dir` along with every
+    /// header of [`include_path_root`], so that a single include path is enough
+    /// to resolve what an eBPF source file includes.
+    ///
+    /// Setting an explicit directory is convenient,
+    /// as this allows users to configure their IDE with a `.clangd` file.
+    pub fn export_headers_to<P: AsRef<Path>>(&self, dir: P) -> &Self {
+        let dir = dir.as_ref();
+        dump_kernel_btf(dir);
+        copy_dir(&include_path_root(), dir);
+
+        self
+    }
+
     /// Compiles every source file and generates a skeleton for it that
     /// [`crate::include_bpf`] can include.
     pub fn build(&self) {
@@ -381,8 +383,10 @@ impl Builder {
 
 /// Compiles every `*.bpf.c` file below `src` and generates a skeleton for it
 /// that [`crate::include_bpf`] can include. See [`Builder`] for more control.
+/// Additionally, this function conveniently exports the xBPF headers for your
+/// IDE.
 pub fn build() {
-    Builder::new().build();
+    Builder::new().export_headers().build();
 }
 
 /// Dumps the BTF of the running kernel as a `vmlinux.h` header into `dir` and
@@ -431,6 +435,30 @@ pub fn dump_kernel_btf<P: AsRef<Path>>(dir: P) -> PathBuf {
     dir
 }
 
+/// Recursively copies the contents of `from` into `to`, overwriting the files
+/// that are already there.
+fn copy_dir(from: &Path, to: &Path) {
+    if let Err(e) = std::fs::create_dir_all(to) {
+        panic!("Failed to create directory {}: {e}", to.display());
+    }
+
+    let entries = std::fs::read_dir(from)
+        .unwrap_or_else(|e| panic!("Failed to read directory {}: {e}", from.display()));
+
+    for entry in entries {
+        let entry =
+            entry.unwrap_or_else(|e| panic!("Failed to read entry of {}: {e}", from.display()));
+        let src = entry.path();
+        let dst = to.join(entry.file_name());
+
+        if src.is_dir() {
+            copy_dir(&src, &dst);
+        } else if let Err(e) = std::fs::copy(&src, &dst) {
+            panic!("Failed to copy {} to {}: {e}", src.display(), dst.display());
+        }
+    }
+}
+
 /// Returns true if `target` is enabled at `level` by this EnvFilter.
 fn target_enabled_at(filter: &EnvFilter, target: &'static str, level: Level) -> bool {
     let cs = tracing::callsite!(name: "fake", kind: tracing::metadata::Kind::EVENT, fields: &[]);
@@ -477,23 +505,23 @@ fn level_from_env(env_var: &str) -> LevelFilter {
 /// definitions. The log level is determined by the `RUST_LOG`
 /// environment variable.
 #[inline]
-pub fn clang_args_from_default_env() -> Vec<OsString> {
-    clang_args_from_env(EnvFilter::DEFAULT_ENV)
+pub fn tracing_clang_args_from_default_env() -> Vec<OsString> {
+    tracing_clang_args_from_env(EnvFilter::DEFAULT_ENV)
 }
 
-/// Similar to [`clang_args_from_default_env`], but takes the name of the environment
+/// Similar to [`tracing_clang_args_from_default_env`], but takes the name of the environment
 /// variable that determines the log level.
 #[inline]
-pub fn clang_args_from_env(env_var: &str) -> Vec<OsString> {
+pub fn tracing_clang_args_from_env(env_var: &str) -> Vec<OsString> {
     println!("cargo:rerun-if-env-changed={env_var}");
     println!("cargo:rerun-if-changed={}", include_path_root().display());
     let level = level_from_env(env_var);
 
-    clang_args(level)
+    tracing_clang_args(level)
 }
 
-/// Similar to [`clang_args_from_default_env`], but takes an explicit tracing [`LevelFilter`].
-pub fn clang_args(level: LevelFilter) -> Vec<OsString> {
+/// Similar to [`tracing_clang_args_from_default_env`], but takes an explicit tracing [`LevelFilter`].
+pub fn tracing_clang_args(level: LevelFilter) -> Vec<OsString> {
     let mut args = vec![OsString::from("-I"), OsString::from(include_path_root())];
     let log_level = match level {
         LevelFilter::OFF => 0,
@@ -554,7 +582,7 @@ pub fn tracing_str_len_args(len: usize) -> [OsString; 2] {
 }
 
 /// Returns the root path of the include directory. Note that arguments returned
-/// by [`clang_args_from_default_env`] and [`clang_args`] already contain this path.
+/// by [`tracing_clang_args_from_default_env`] and [`tracing_clang_args`] already contain this path.
 #[inline]
 pub fn include_path_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("include")
@@ -579,7 +607,7 @@ mod tests {
         let env_var = "RUST_LOG";
         let clang_args =
             temp_env::with_var(env_var, Some("trace,bpf=debug,other_target=warn"), || {
-                clang_args_from_default_env()
+                tracing_clang_args_from_default_env()
             });
 
         assert!(clang_args.contains(&OsString::from("BPF_TRACING_LEVEL=4")));
