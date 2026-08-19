@@ -1129,17 +1129,8 @@ dependencies = [
  "glob",
  "libbpf-cargo",
  "libbpf-rs",
- "tempfile",
- "tracing",
- "tracing-subscriber",
- "xbpf-include",
-]
-
-[[package]]
-name = "xbpf-include"
-version = "0.0.1"
-dependencies = [
  "temp-env",
+ "tempfile",
  "tracing",
  "tracing-subscriber",
 ]

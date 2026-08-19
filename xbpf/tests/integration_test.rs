@@ -1,15 +1,17 @@
-use libbpf_rs::{
-    ProgramInput,
-    skel::{OpenSkel, Skel, SkelBuilder},
-};
+// The tests build eBPF programs with `xbpf::build` and assert on what
+// `xbpf::tracing` emits, so they need both features.
+#![cfg(all(feature = "build", feature = "tracing"))]
+
+use libbpf_rs::{ObjectBuilder, ProgramInput};
 use std::{
     io::Write,
-    mem::MaybeUninit,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
-use tracing::Level;
+use tracing::{Level, level_filters::LevelFilter};
 use tracing_subscriber::fmt::MakeWriter;
+use xbpf::build::Builder;
 
 /// A `tracing_subscriber` writer that buffers everything in memory instead
 /// of writing to stdout/stderr, so tests can inspect what was logged.
@@ -40,6 +42,29 @@ impl<'a> MakeWriter<'a> for InMemoryWriter {
     }
 }
 
+/// Compiles the eBPF source file `name` from `tests/bpf` into `dir` and
+/// returns the path of the resulting object file.
+///
+/// The tests compile their eBPF programs at run time rather than from a build
+/// script, so that `xbpf` itself doesn't need one. [`Builder`] dumps the kernel
+/// BTF into `dir` on its own, so no `vmlinux.h` has to be provided.
+fn build_bpf_obj(name: &str, dir: &Path) -> PathBuf {
+    let src = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("bpf")
+        .join(name);
+
+    let mut objs = Builder::new()
+        .source(&src)
+        .out_dir(dir)
+        .tracing_level(LevelFilter::DEBUG)
+        .tracing_ring_buf_size(512 * 1024)
+        .build_objects();
+
+    objs.pop()
+        .unwrap_or_else(|| panic!("no object built for {}", src.display()))
+}
+
 // Tests in the nested `root` module load and run real eBPF programs, which
 // requires root (or equivalent capabilities). CI runs
 // `cargo test -- --skip ':root:'`, which matches on the fully-qualified
@@ -51,8 +76,6 @@ mod tests {
     mod root {
         use super::*;
 
-        include!(concat!(env!("OUT_DIR"), "/loop.skel.rs"));
-
         #[test]
         fn loop_iterations_are_traced_in_order() {
             let writer = InMemoryWriter::default();
@@ -62,18 +85,23 @@ mod tests {
                 .with_ansi(false)
                 .init();
 
-            let mut open_obj = MaybeUninit::uninit();
-            let skel_builder = LoopSkelBuilder::default();
-            let open_skel = skel_builder.open(&mut open_obj).expect("open skel");
-            let skel = open_skel.load().expect("load skel");
-            bpf::tracing::try_init(skel.object()).expect("bpf::tracing init");
+            let dir = tempfile::tempdir().expect("temp dir");
+            let obj_path = build_bpf_obj("loop.bpf.c", dir.path());
+
+            let obj = ObjectBuilder::default()
+                .open_file(&obj_path)
+                .expect("open object")
+                .load()
+                .expect("load object");
+            xbpf::tracing::try_init(&obj).expect("xbpf::tracing init");
 
             // `trace_loop` is a BPF_PROG_TYPE_SYSCALL program: it isn't
             // attached to anything, it's invoked directly via BPF_PROG_RUN.
-            skel.progs
-                .trace_loop
-                .test_run(ProgramInput::default())
-                .expect("test run");
+            let prog = obj
+                .progs_mut()
+                .find(|prog| prog.name() == "trace_loop")
+                .expect("trace_loop program");
+            prog.test_run(ProgramInput::default()).expect("test run");
 
             let log = wait_for_events(&writer, 1000, Duration::from_secs(5));
 

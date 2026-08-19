@@ -80,7 +80,7 @@
 //! let open_skel = skel_builder.open(&mut open_obj)?;
 //! let skel = open_skel.load()?;
 //!
-//! bpf::tracing::try_init(skel.object());
+//! xbpf::tracing::try_init(skel.object());
 //! # Ok(())
 //! # }
 //! ```
@@ -92,6 +92,7 @@
 //! ```
 //!
 //! [`tracing`]: https://github.com/tokio-rs/tracing
+use crate::event::{CallsiteKey, Event, Kind};
 use libbpf_rs::{MapCore, MapHandle};
 use std::{
     cell::RefCell,
@@ -100,7 +101,6 @@ use std::{
     thread::{self},
 };
 use tracing::{self, metadata::Metadata, span::EnteredSpan, warn};
-use xbpf_include::event::{CallsiteKey, Event, Kind};
 
 const TARGET: &str = "bpf";
 

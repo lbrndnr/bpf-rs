@@ -1,5 +1,5 @@
-#ifndef __EBPF_TRACING_H__
-#define __EBPF_TRACING_H__
+#ifndef __XBPF_TRACING_H__
+#define __XBPF_TRACING_H__
 
 #include "vmlinux.h"
 #include <bpf/bpf_helpers.h>
@@ -21,8 +21,8 @@ enum tracing_event_type {
     BPF_TRACING_EVENT_TYPE_SPAN_END,
 };
 
-#ifndef BPF_TRACING_RINGBUF_SIZE
-    #define BPF_TRACING_RINGBUF_SIZE 8192
+#ifndef BPF_TRACING_RING_BUF_SIZE
+    #define BPF_TRACING_RING_BUF_SIZE 8192
 #endif
 
 #ifndef BPF_TRACING_STR_LEN
@@ -31,7 +31,7 @@ enum tracing_event_type {
 
 struct {
     __uint(type, BPF_MAP_TYPE_RINGBUF);
-    __uint(max_entries, BPF_TRACING_RINGBUF_SIZE);
+    __uint(max_entries, BPF_TRACING_RING_BUF_SIZE);
 } bpf_tracing_events SEC(".maps");
 
 #ifdef BPF_TRACING_SOURCE_LOC
@@ -128,4 +128,4 @@ struct bpf_tracing_event {
     #define bpf_start_trace_span(fmt, ...) (0)
 #endif
 
-#endif // __EBPF_TRACING_H__
+#endif // __XBPF_TRACING_H__

@@ -1,5 +1,5 @@
 #include "vmlinux.h"
-#include "xbpf/tracing.h"
+#include "xbpf.h"
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
 

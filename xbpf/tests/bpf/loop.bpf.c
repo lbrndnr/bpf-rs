@@ -1,6 +1,6 @@
 #include "vmlinux.h"
 #include <bpf/bpf_helpers.h>
-#include "xbpf/tracing.h"
+#include "xbpf.h"
 
 char LICENSE[] SEC("license") = "GPL";
 

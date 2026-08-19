@@ -1,3 +1,52 @@
+//! Build script support for compiling eBPF programs against the xBPF headers.
+//!
+//! Everything in this module is meant to be called from a build script.
+//! Most of the time [`build`] is enough: it compiles every `*.bpf.c` file
+//! below `src` and generates a skeleton for it that [`crate::include_bpf`]
+//! can include. [`Builder`] offers the same with more control, and
+//! [`clang_args_from_default_env`] returns just the clang arguments needed
+//! to compile a program that uses [`crate::tracing`].
+//!
+//! How the tracing events are copied to user space can be customized with
+//! [`Builder::tracing_ring_buf_size`] and [`Builder::tracing_str_len`], or with the
+//! [`tracing_ring_buf_size_args`] and [`tracing_str_len_args`] arguments when driving clang
+//! directly.
+//!
+//! # Example
+//!
+//! ```no_run
+//! # use std::ffi::OsString;
+//! # struct SkeletonBuilder;
+//! #
+//! # impl SkeletonBuilder {
+//! #     fn new() -> Self {
+//! #         Self
+//! #     }
+//! #
+//! #     fn source(self, _src: &str) -> Self {
+//! #         self
+//! #     }
+//! #
+//! #     fn clang_args(self, _args: Vec<OsString>) -> Self {
+//! #         self
+//! #     }
+//! #
+//! #     fn build_and_generate(self, _out: &str) -> Result<(), ()> {
+//! #         unimplemented!()
+//! #     }
+//! # }
+//! #
+//! # let out = "out";
+//! # let src = "src";
+//! let mut args = vec![OsString::from("-I"), OsString::from("../include")];
+//! args.extend(xbpf::build::clang_args_from_default_env());
+//!
+//! SkeletonBuilder::new()
+//!     .source(&src)
+//!     .clang_args(args)
+//!     .build_and_generate(&out)
+//!     .unwrap();
+//! ```
 use libbpf_cargo::SkeletonBuilder;
 use std::{
     collections::HashMap,
@@ -7,6 +56,8 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
 };
+use tracing::{Dispatch, Level, Metadata, level_filters::LevelFilter};
+use tracing_subscriber::{EnvFilter, layer::SubscriberExt, registry::Registry};
 
 /// Includes the generated skeleton for the eBPF program with the given name.
 #[macro_export]
@@ -25,6 +76,21 @@ pub struct Builder {
 
     /// Additional clang arguments that apply to all jobs.
     clang_args: Vec<OsString>,
+
+    /// The directory generated files are written to, `OUT_DIR` if unset.
+    out_dir: Option<PathBuf>,
+
+    /// The tracing level to compile with, derived from `RUST_LOG` if unset.
+    #[cfg(feature = "tracing")]
+    tracing_level: Option<LevelFilter>,
+
+    /// The value of `BPF_TRACING_RING_BUF_SIZE`, its default if unset.
+    #[cfg(feature = "tracing")]
+    tracing_ring_buf_size: Option<usize>,
+
+    /// The value of `BPF_TRACING_STR_LEN`, its default if unset.
+    #[cfg(feature = "tracing")]
+    tracing_str_len: Option<usize>,
 }
 
 impl Builder {
@@ -33,6 +99,13 @@ impl Builder {
             pattern: String::from("src/**/*.bpf.c"),
             sources: Vec::new(),
             clang_args: Vec::new(),
+            out_dir: None,
+            #[cfg(feature = "tracing")]
+            tracing_level: None,
+            #[cfg(feature = "tracing")]
+            tracing_ring_buf_size: None,
+            #[cfg(feature = "tracing")]
+            tracing_str_len: None,
         }
     }
 
@@ -52,47 +125,80 @@ impl Builder {
         self
     }
 
-    pub fn dump_kernel_btf() -> OsString {
-        let out_dir = Builder::get_env_var("OUT_DIR");
-        let include_dir = out_dir.join("include");
+    /// Sets the directory that generated files are written to.
+    ///
+    /// Defaults to `OUT_DIR`, which is only set for build scripts. Callers
+    /// outside of a build script, such as tests, have to set it explicitly.
+    pub fn out_dir<P: AsRef<Path>>(&mut self, dir: P) -> &mut Self {
+        self.out_dir = Some(dir.as_ref().to_path_buf());
+        self
+    }
 
-        let vmlinux_path = include_dir.join("vmlinux.h");
-        if vmlinux_path.exists() {
-            return include_dir.into_os_string();
+    /// Sets the tracing level the eBPF programs are compiled with.
+    ///
+    /// Defaults to the level that `RUST_LOG` resolves to for the `bpf` target.
+    #[cfg(feature = "tracing")]
+    pub fn tracing_level(&mut self, level: LevelFilter) -> &mut Self {
+        self.tracing_level = Some(level);
+        self
+    }
+
+    /// Sets `BPF_TRACING_RING_BUF_SIZE`, the size of the ring buffer the tracing
+    /// events are copied through, in bytes. See [`tracing_ring_buf_size_args`].
+    #[cfg(feature = "tracing")]
+    pub fn tracing_ring_buf_size(&mut self, size: usize) -> &mut Self {
+        self.tracing_ring_buf_size = Some(size);
+        self
+    }
+
+    /// Sets `BPF_TRACING_STR_LEN`, the maximum length of the strings a tracing
+    /// event carries, in bytes. See [`tracing_str_len_args`].
+    #[cfg(feature = "tracing")]
+    pub fn tracing_str_len(&mut self, len: usize) -> &mut Self {
+        self.tracing_str_len = Some(len);
+        self
+    }
+
+    /// Returns the directory generated files are written to.
+    fn resolved_out_dir(&self) -> PathBuf {
+        match &self.out_dir {
+            Some(dir) => dir.clone(),
+            None => {
+                let Some(dir) = env::var_os("OUT_DIR") else {
+                    panic!(
+                        "OUT_DIR must be set to compile eBPF programs. Call `out_dir` when \
+                         building outside of a build script."
+                    );
+                };
+                PathBuf::from(dir)
+            }
+        }
+    }
+
+    /// Returns every clang argument a job is compiled with, including the ones
+    /// needed to find the kernel BTF and the xBPF headers.
+    fn all_clang_args(&self) -> Vec<OsString> {
+        let btf_include = dump_kernel_btf(self.resolved_out_dir().join("include"));
+        let mut args = vec![OsString::from("-I"), btf_include.into_os_string()];
+
+        #[cfg(feature = "tracing")]
+        {
+            args.extend(match self.tracing_level {
+                Some(level) => clang_args(level),
+                None => clang_args_from_default_env(),
+            });
+
+            if let Some(size) = self.tracing_ring_buf_size {
+                args.extend(tracing_ring_buf_size_args(size));
+            }
+
+            if let Some(len) = self.tracing_str_len {
+                args.extend(tracing_str_len_args(len));
+            }
         }
 
-        if Command::new("bpftool").arg("--version").output().is_err() {
-            panic!("bpftool is required to dump kernel BTF but was not found on PATH");
-        }
-
-        let output = Command::new("bpftool")
-            .args([
-                "btf",
-                "dump",
-                "file",
-                "/sys/kernel/btf/vmlinux",
-                "format",
-                "c",
-            ])
-            .output()
-            .unwrap_or_else(|e| panic!("Failed to run bpftool: {e}"));
-        if !output.status.success() {
-            panic!(
-                "bpftool btf dump failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-        }
-
-        if std::fs::create_dir_all(&include_dir).is_err() {
-            panic!(
-                "Failed to create include directory: {}",
-                include_dir.display()
-            );
-        }
-
-        std::fs::write(&vmlinux_path, output.stdout)
-            .unwrap_or_else(|e| panic!("Failed to write {:?}: {e}", vmlinux_path));
-        include_dir.into_os_string()
+        args.extend(self.clang_args.iter().cloned());
+        args
     }
 
     fn path_relative_to_src(path: &Path) -> Option<&Path> {
@@ -105,35 +211,40 @@ impl Builder {
         None
     }
 
-    fn get_env_var(name: &str) -> PathBuf {
-        let Some(out_dir) = env::var_os(&name) else {
-            panic!("{name} must be set to compile eBPF programs.");
-        };
-        PathBuf::from(&out_dir)
+    /// Returns the root of the crate being built, which is only known inside
+    /// a build script.
+    fn manifest_dir() -> Option<PathBuf> {
+        env::var_os("CARGO_MANIFEST_DIR").map(PathBuf::from)
     }
 
-    pub fn build(&self) {
-        let out_dir = Builder::get_env_var("OUT_DIR");
-        let manifest_dir = Builder::get_env_var("CARGO_MANIFEST_DIR");
+    /// Returns every source file to compile along with the number of times
+    /// its name occurs, which decides whether it can be linked into `out_dir`.
+    fn named_sources(&self) -> (Vec<(PathBuf, String)>, HashMap<String, usize>) {
+        // The glob pattern is relative to the crate root, so it can only be
+        // resolved inside a build script. Everywhere else the explicitly
+        // specified sources are all there is to build.
+        let globbed = Builder::manifest_dir().map_or_else(Vec::new, |manifest_dir| {
+            let pattern = manifest_dir.join(&self.pattern);
+            let Some(pattern) = pattern.to_str() else {
+                panic!("Invalid eBPF glob pattern: {}", self.pattern);
+            };
 
-        let pattern = PathBuf::from(&manifest_dir).join(&self.pattern);
-        let Some(pattern) = pattern.to_str() else {
-            panic!("Invalid eBPF glob pattern: {}", self.pattern);
-        };
+            let Ok(files) = glob::glob(pattern) else {
+                panic!("Invalid eBPF glob pattern: {}", self.pattern);
+            };
 
-        let Ok(files) = glob::glob(pattern) else {
-            panic!("Invalid eBPF glob pattern: {}", self.pattern);
-        };
+            files
+                .filter_map(|f| match f {
+                    Ok(file) => Some(file),
+                    Err(e) => {
+                        println!("cargo:warning=Failed to read eBPF source file: {:?}", e);
+                        None
+                    }
+                })
+                .collect()
+        });
 
-        let files = files
-            .filter_map(|f| match f {
-                Ok(file) => Some(file),
-                Err(e) => {
-                    println!("cargo:warning=Failed to read eBPF source file: {:?}", e);
-                    None
-                }
-            })
-            .chain(self.sources.clone().into_iter());
+        let files = globbed.into_iter().chain(self.sources.clone().into_iter());
 
         let mut name_counts: HashMap<String, usize> = HashMap::new();
         let named_files: Vec<(PathBuf, String)> = files
@@ -148,24 +259,70 @@ impl Builder {
             })
             .collect();
 
+        (named_files, name_counts)
+    }
+
+    /// Returns the directory the artifacts of `file` are written to, mirroring
+    /// the layout the source file has below `src`.
+    fn out_subdir(&self, file: &Path) -> PathBuf {
+        let rel_dir = Builder::path_relative_to_src(file).unwrap_or(Path::new(""));
+        let out_subdir = self.resolved_out_dir().join(rel_dir);
+
+        if std::fs::create_dir_all(&out_subdir).is_err() {
+            panic!(
+                "Failed to create output directory: {}",
+                out_subdir.display()
+            );
+        }
+
+        out_subdir
+    }
+
+    /// Compiles every source file into an object file and returns their paths.
+    ///
+    /// Unlike [`Builder::build`] this doesn't generate skeletons, so the
+    /// objects have to be loaded at run time, for instance with
+    /// [`crate::libbpf::ObjectBuilder`].
+    pub fn build_objects(&self) -> Vec<PathBuf> {
+        let clang_args = self.all_clang_args();
+        let (named_files, _) = self.named_sources();
+
+        named_files
+            .into_iter()
+            .map(|(file, name)| {
+                println!("cargo:rerun-if-changed={}", file.display());
+
+                let out = self.out_subdir(&file).join(format!("{name}.o"));
+                let res = SkeletonBuilder::new()
+                    .source(&file)
+                    .obj(&out)
+                    .clang_args(&clang_args)
+                    .build();
+                if res.is_err() {
+                    panic!("Failed to compile eBPF source file: {:?}: {:?}", file, res);
+                }
+
+                out
+            })
+            .collect()
+    }
+
+    /// Compiles every source file and generates a skeleton for it that
+    /// [`crate::include_bpf`] can include.
+    pub fn build(&self) {
+        let out_dir = self.resolved_out_dir();
+        let clang_args = self.all_clang_args();
+        let (named_files, name_counts) = self.named_sources();
+
         for (file, name) in named_files {
             println!("cargo:rerun-if-changed={}", file.display());
 
-            let rel_dir = Builder::path_relative_to_src(&file).unwrap_or(Path::new(""));
-            let out_subdir = out_dir.join(rel_dir);
-
-            if std::fs::create_dir_all(&out_subdir).is_err() {
-                panic!(
-                    "Failed to create output directory: {}",
-                    out_subdir.display()
-                );
-            }
-
+            let out_subdir = self.out_subdir(&file);
             let skel_name = format!("{}.skel.rs", name);
             let out = out_subdir.join(&skel_name);
             let res = SkeletonBuilder::new()
                 .source(&file)
-                .clang_args(&self.clang_args)
+                .clang_args(&clang_args)
                 .build_and_generate(&out);
             if res.is_err() {
                 panic!("Failed to compile eBPF source file: {:?}: {:?}", file, res);
@@ -189,13 +346,207 @@ impl Builder {
     }
 }
 
+/// Compiles every `*.bpf.c` file below `src` and generates a skeleton for it
+/// that [`crate::include_bpf`] can include. See [`Builder`] for more control.
 pub fn build() {
-    let mut clang_args = vec![OsString::from("-I"), Builder::dump_kernel_btf()];
+    Builder::new().build();
+}
 
-    if cfg!(feature = "tracing") {
-        let tracing_args = xbpf_include::clang_args_from_default_env(None);
-        clang_args.extend(tracing_args.into_iter().map(|a| a.to_os_string()));
+/// Dumps the BTF of the running kernel as a `vmlinux.h` header into `dir` and
+/// returns `dir`, so that it can be passed to clang as an include path.
+///
+/// Dumping is skipped if the header already exists. Requires `bpftool` on
+/// `PATH`.
+pub fn dump_kernel_btf<P: AsRef<Path>>(dir: P) -> PathBuf {
+    let dir = dir.as_ref().to_path_buf();
+    let vmlinux_path = dir.join("vmlinux.h");
+    if vmlinux_path.exists() {
+        return dir;
     }
 
-    Builder::new().clang_arg(clang_args.into_iter()).build();
+    if Command::new("bpftool").arg("--version").output().is_err() {
+        panic!("bpftool is required to dump kernel BTF but was not found on PATH");
+    }
+
+    let output = Command::new("bpftool")
+        .args([
+            "btf",
+            "dump",
+            "file",
+            "/sys/kernel/btf/vmlinux",
+            "format",
+            "c",
+        ])
+        .output()
+        .unwrap_or_else(|e| panic!("Failed to run bpftool: {e}"));
+    if !output.status.success() {
+        panic!(
+            "bpftool btf dump failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    if std::fs::create_dir_all(&dir).is_err() {
+        panic!("Failed to create include directory: {}", dir.display());
+    }
+
+    std::fs::write(&vmlinux_path, output.stdout)
+        .unwrap_or_else(|e| panic!("Failed to write {:?}: {e}", vmlinux_path));
+
+    dir
+}
+
+/// Returns true if `target` is enabled at `level` by this EnvFilter.
+fn target_enabled_at(filter: &EnvFilter, target: &'static str, level: Level) -> bool {
+    let cs = tracing::callsite!(name: "fake", kind: tracing::metadata::Kind::EVENT, fields: &[]);
+    let meta = Metadata::new(
+        "probe",
+        target,
+        level,
+        None,
+        None,
+        None,
+        tracing::field::FieldSet::new(&[], tracing::callsite::Identifier(cs)),
+        tracing::metadata::Kind::EVENT,
+    );
+
+    let dispatch = Dispatch::new(Registry::default().with(filter.clone()));
+    dispatch.enabled(&meta)
+}
+
+/// Returns the level filter for the given environment variable name.
+fn level_from_env(env_var: &str) -> LevelFilter {
+    let filter = EnvFilter::builder()
+        .with_env_var(env_var)
+        .with_default_directive(LevelFilter::OFF.into())
+        .from_env_lossy();
+
+    if target_enabled_at(&filter, "bpf", Level::TRACE) {
+        LevelFilter::TRACE
+    } else if target_enabled_at(&filter, "bpf", Level::DEBUG) {
+        LevelFilter::DEBUG
+    } else if target_enabled_at(&filter, "bpf", Level::INFO) {
+        LevelFilter::INFO
+    } else if target_enabled_at(&filter, "bpf", Level::WARN) {
+        LevelFilter::WARN
+    } else if target_enabled_at(&filter, "bpf", Level::ERROR) {
+        LevelFilter::ERROR
+    } else {
+        LevelFilter::OFF
+    }
+}
+
+/// Returns the clang arguments used to compile an eBPF program with [`crate::tracing`].
+///
+/// The vector contains the path to the include directory along with other clang
+/// definitions. The log level is determined by the `RUST_LOG`
+/// environment variable.
+#[inline]
+pub fn clang_args_from_default_env() -> Vec<OsString> {
+    clang_args_from_env(EnvFilter::DEFAULT_ENV)
+}
+
+/// Similar to [`clang_args_from_default_env`], but takes the name of the environment
+/// variable that determines the log level.
+#[inline]
+pub fn clang_args_from_env(env_var: &str) -> Vec<OsString> {
+    println!("cargo:rerun-if-env-changed={env_var}");
+    println!("cargo:rerun-if-changed={}", include_path_root().display());
+    let level = level_from_env(env_var);
+
+    clang_args(level)
+}
+
+/// Similar to [`clang_args_from_default_env`], but takes an explicit tracing [`LevelFilter`].
+pub fn clang_args(level: LevelFilter) -> Vec<OsString> {
+    let mut args = vec![OsString::from("-I"), OsString::from(include_path_root())];
+    let log_level = match level {
+        LevelFilter::OFF => 0,
+        LevelFilter::ERROR => 1,
+        LevelFilter::WARN => 2,
+        LevelFilter::INFO => 3,
+        LevelFilter::DEBUG => 4,
+        LevelFilter::TRACE => 5,
+    };
+    if log_level == 0 {
+        return args;
+    }
+
+    let log_level = format!("BPF_TRACING_LEVEL={log_level}");
+    args.extend_from_slice(&[OsString::from("-D"), OsString::from(log_level)]);
+
+    if cfg!(feature = "tracing-source-loc") {
+        args.extend_from_slice(&[
+            OsString::from("-D"),
+            OsString::from("BPF_TRACING_SOURCE_LOC=1"),
+        ]);
+    }
+
+    args
+}
+
+/// Returns the clang arguments that set `BPF_TRACING_RING_BUF_SIZE`, the size of
+/// the ring buffer the tracing events are copied to user space through.
+///
+/// The size is given in bytes and must be a power of two multiple of the page
+/// size. It defaults to 8192. Events that arrive while the ring buffer is full
+/// are dropped, so size it to fit the largest expected burst.
+#[inline]
+pub fn tracing_ring_buf_size_args(size: usize) -> [OsString; 2] {
+    [
+        OsString::from("-D"),
+        OsString::from(format!("BPF_TRACING_RING_BUF_SIZE={size}")),
+    ]
+}
+
+/// Returns the clang arguments that set `BPF_TRACING_STR_LEN`, the maximum
+/// length of the strings a tracing event carries.
+///
+/// The length is given in bytes and defaults to 128. Longer messages, and with
+/// the `tracing-source-loc` feature longer file names, are truncated to it. It
+/// is part of the size of every event, so raising it also raises how much of
+/// the ring buffer a single event occupies.
+///
+/// Note that [`crate::event`] decodes events assuming the default of 128 bytes,
+/// so events emitted by a program compiled with a different length are decoded
+/// incorrectly.
+#[inline]
+pub fn tracing_str_len_args(len: usize) -> [OsString; 2] {
+    [
+        OsString::from("-D"),
+        OsString::from(format!("BPF_TRACING_STR_LEN={len}")),
+    ]
+}
+
+/// Returns the root path of the include directory. Note that arguments returned
+/// by [`clang_args_from_default_env`] and [`clang_args`] already contain this path.
+#[inline]
+pub fn include_path_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("include")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_rich_env_var() {
+        let env_var = "TEST_VAR";
+        let level = temp_env::with_var(env_var, Some("trace,bpf=debug,other_target=warn"), || {
+            level_from_env(env_var)
+        });
+
+        assert_eq!(level, LevelFilter::DEBUG);
+    }
+
+    #[test]
+    fn parse_default_rich_env_var() {
+        let env_var = "RUST_LOG";
+        let clang_args =
+            temp_env::with_var(env_var, Some("trace,bpf=debug,other_target=warn"), || {
+                clang_args_from_default_env()
+            });
+
+        assert!(clang_args.contains(&OsString::from("BPF_TRACING_LEVEL=4")));
+    }
 }

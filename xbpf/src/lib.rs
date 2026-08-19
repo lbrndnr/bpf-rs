@@ -8,10 +8,14 @@ mod prog;
 pub use prog::Program;
 
 #[cfg(feature = "tracing")]
+pub mod event;
+
+#[cfg(feature = "tracing")]
 pub mod tracing;
 
 #[cfg(feature = "build")]
 pub mod build;
+#[cfg(feature = "build")]
 pub use build::build;
 
 // fn print(level: libbpf::PrintLevel, msg: String) {

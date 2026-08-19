@@ -10,23 +10,19 @@ readme.workspace = true
 keywords.workspace = true
 
 [dependencies]
-xbpf-include = { path = "../xbpf-include" }
 glob = { version = "0.3.4", optional = true }
 libbpf-cargo = "0.26.2"
 libbpf-rs = "0.26.2"
 tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"], optional = true }
 
 [dev-dependencies]
+temp-env = "0.3.6"
 tempfile = "3.27.0"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 
-[build-dependencies]
-xbpf-include = { path = "../xbpf-include" }
-libbpf-cargo = "0.26.2"
-tracing = "0.1.44"
-
 [features]
 default = ["build", "tracing"]
-build = ["dep:glob"]
+build = ["dep:glob", "dep:tracing-subscriber"]
 tracing = []
-tracing-source-loc = ["xbpf-include/tracing-source-loc"]
+tracing-source-loc = []
