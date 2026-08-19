@@ -46,8 +46,7 @@ impl<'a> MakeWriter<'a> for InMemoryWriter {
 /// returns the path of the resulting object file.
 ///
 /// The tests compile their eBPF programs at run time rather than from a build
-/// script, so that `xbpf` itself doesn't need one. [`Builder`] dumps the kernel
-/// BTF into `dir` on its own, so no `vmlinux.h` has to be provided.
+/// script, so that `xbpf` itself doesn't need one.
 fn build_bpf_obj(name: &str, dir: &Path) -> PathBuf {
     let src = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
@@ -65,63 +64,54 @@ fn build_bpf_obj(name: &str, dir: &Path) -> PathBuf {
         .unwrap_or_else(|| panic!("no object built for {}", src.display()))
 }
 
-// Tests in the nested `root` module load and run real eBPF programs, which
-// requires root (or equivalent capabilities). CI runs
-// `cargo test -- --skip ':root:'`, which matches on the fully-qualified
-// `tests::root::...` test path, to exclude them from the unprivileged test
-// run.
 mod tests {
     use super::*;
 
-    mod root {
-        use super::*;
+    #[test]
+    fn loop_iterations_are_traced_in_order() {
+        let writer = InMemoryWriter::default();
+        tracing_subscriber::fmt()
+            .with_max_level(Level::DEBUG)
+            .with_writer(writer.clone())
+            .with_ansi(false)
+            .init();
 
-        #[test]
-        fn loop_iterations_are_traced_in_order() {
-            let writer = InMemoryWriter::default();
-            tracing_subscriber::fmt()
-                .with_max_level(Level::DEBUG)
-                .with_writer(writer.clone())
-                .with_ansi(false)
-                .init();
+        let dir = tempfile::tempdir().expect("temp dir");
+        let obj_path = build_bpf_obj("loop.bpf.c", dir.path());
 
-            let dir = tempfile::tempdir().expect("temp dir");
-            let obj_path = build_bpf_obj("loop.bpf.c", dir.path());
+        let obj = ObjectBuilder::default()
+            .open_file(&obj_path)
+            .expect("open object")
+            .load()
+            .expect("load object");
+        xbpf::tracing::try_init(&obj).expect("xbpf::tracing init");
 
-            let obj = ObjectBuilder::default()
-                .open_file(&obj_path)
-                .expect("open object")
-                .load()
-                .expect("load object");
-            xbpf::tracing::try_init(&obj).expect("xbpf::tracing init");
+        // `trace_loop` is a BPF_PROG_TYPE_SYSCALL program: it isn't
+        // attached to anything, it's invoked directly via BPF_PROG_RUN.
+        let prog = obj
+            .progs_mut()
+            .find(|prog| prog.name() == "trace_loop")
+            .expect("trace_loop program");
+        prog.test_run(ProgramInput::default()).expect("test run");
 
-            // `trace_loop` is a BPF_PROG_TYPE_SYSCALL program: it isn't
-            // attached to anything, it's invoked directly via BPF_PROG_RUN.
-            let prog = obj
-                .progs_mut()
-                .find(|prog| prog.name() == "trace_loop")
-                .expect("trace_loop program");
-            prog.test_run(ProgramInput::default()).expect("test run");
+        let log = wait_for_events(&writer, 1000, Duration::from_secs(5));
 
-            let log = wait_for_events(&writer, 1000, Duration::from_secs(5));
+        let numbers: Vec<u32> = log
+            .lines()
+            .filter_map(|line| line.rsplit_once("bpf: asdf qwer asdf qwer "))
+            .filter_map(|(_, msg)| msg.trim().parse::<u32>().ok())
+            .collect();
 
-            let numbers: Vec<u32> = log
-                .lines()
-                .filter_map(|line| line.rsplit_once("bpf: asdf qwer asdf qwer "))
-                .filter_map(|(_, msg)| msg.trim().parse::<u32>().ok())
-                .collect();
+        assert_eq!(numbers, (0..1000).collect::<Vec<u32>>());
+    }
 
-            assert_eq!(numbers, (0..1000).collect::<Vec<u32>>());
-        }
-
-        fn wait_for_events(writer: &InMemoryWriter, expected: usize, timeout: Duration) -> String {
-            let start = Instant::now();
-            loop {
-                let log = writer.contents();
-                let seen = log.lines().filter(|line| line.contains("bpf: ")).count();
-                if seen >= expected || start.elapsed() > timeout {
-                    return log;
-                }
+    fn wait_for_events(writer: &InMemoryWriter, expected: usize, timeout: Duration) -> String {
+        let start = Instant::now();
+        loop {
+            let log = writer.contents();
+            let seen = log.lines().filter(|line| line.contains("bpf: ")).count();
+            if seen >= expected || start.elapsed() > timeout {
+                return log;
             }
         }
     }
