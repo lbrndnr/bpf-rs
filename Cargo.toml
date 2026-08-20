@@ -10,3 +10,4 @@ authors = [
 repository = "https://github.com/lbrndnr/bpf"
 readme = "README.md"
 keywords = ["ebpf", "bpf", "libbpf", "linux"]
+description = "An ergonomic and light-weight eBPF library"

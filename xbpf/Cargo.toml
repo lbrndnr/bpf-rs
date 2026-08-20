@@ -2,7 +2,7 @@
 name = "xbpf"
 version = "0.0.2"
 edition = "2024"
-description = "An ergonomic and light-weight eBPF library"
+description.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
