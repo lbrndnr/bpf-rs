@@ -9,4 +9,4 @@ authors = [
 ]
 repository = "https://github.com/lbrndnr/bpf"
 readme = "README.md"
-keywords = ["ebpf", "bpf", "libbpf"]
+keywords = ["ebpf", "bpf", "libbpf", "linux"]
