@@ -1,6 +1,6 @@
 # xBPF
 
-xBPF is a high-level eBPF library for Rust. Its main goal is an ergonomic and light-weight interface to eBPF. Using it should make the learning curve for beginners a bit more manageable, and make advanced users more productive.
+xBPF (eXtended BPF) is a high-level eBPF library for Rust. Its main goal is an ergonomic and light-weight interface to eBPF. Using it should make the learning curve for beginners a bit more manageable, and make advanced users more productive.
 
 It builds on [libbpf-rs](https://github.com/libbpf/libbpf-rs) and adds the parts every eBPF project ends up writing itself:
 
