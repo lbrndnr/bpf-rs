@@ -155,23 +155,6 @@ pub fn try_init(obj: &libbpf::Object) -> libbpf::Result<()> {
     Ok(())
 }
 
-/// Decodes and emits one record of the ring buffer.
-///
-/// Always returns 0 to keep the poll going, since the callback has no way to
-/// ask for the record to be retried.
-fn process(event: &[u8]) -> i32 {
-    match Event::try_from(event) {
-        Ok(event) => emit(event),
-        Err(err) => {
-            // Returning a negative value here would abort the poll and drop the
-            // record anyway, so account for the loss and keep on reading.
-            tracing::warn!(target: TARGET, "Failed to decode event: {err}");
-        }
-    }
-
-    0
-}
-
 /// Returns `full` without the leading components it shares with `base`.
 ///
 /// The eBPF side records `__FILE__` as it was passed to clang, which is an
