@@ -1,6 +1,19 @@
 # xBPF
 
+[![Crates.io][crates-badge]][crates-url]
+[![GPL-v3 licensed][gpl-badge]][gpl-url]
+[![Build Status][actions-badge]][actions-url]
+
+[crates-badge]: https://img.shields.io/crates/v/xbpf.svg
+[crates-url]: https://crates.io/crates/xbpf
+[gpl-badge]: https://img.shields.io/badge/License-MIT-blue.svg
+[gpl-url]: LICENSE
+[actions-badge]: https://github.com/lbrndnr/xbpf/actions/workflows/ci.yml/badge.svg
+[actions-url]: https://github.com/lbrndnr/xbpf/actions/workflows/ci.yml
+
 xBPF (eXtended BPF) is a high-level eBPF library for Rust. Its main goal is an ergonomic and light-weight interface to eBPF. Using it should make the learning curve for beginners a bit more manageable, and make advanced users more productive.
+
+<img width="1536" height="1024" alt="xbpf" src="https://github.com/user-attachments/assets/5259abf5-9bcb-48ff-a6c4-7461f5571bd7" />
 
 It builds on [libbpf-rs](https://github.com/libbpf/libbpf-rs) and adds the parts every eBPF project ends up writing itself:
 
