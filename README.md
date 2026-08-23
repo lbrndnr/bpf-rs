@@ -15,15 +15,17 @@
     <img src="https://github.com/lbrndnr/xbpf/raw/main/xbpf.png" alt="xbpf" width="500">
 </p>
 
-xBPF (eXtended BPF) is a high-level eBPF library for Rust. Its main goal is an ergonomic and light-weight interface to eBPF. Using it should make the learning curve for beginners a bit more manageable, and make advanced users more productive.
+xBPF (eXtended BPF) is a high-level eBPF library for Rust. It aims at providing an ergonomic and light-weight interface to eBPF. 
 
-It builds on [libbpf-rs](https://github.com/libbpf/libbpf-rs) and adds the parts every eBPF project ends up writing itself:
+eBPF can be a bit of a footgun: Building, loading, and managing eBPF programs is not necessarily difficult, but can fail in many spectacular ways. xBPF addresses this with convenient helper functions that avoid common pitfalls, and reduce boiler plate code.
 
-* **Building** — one call in a `build.rs` compiles every `*.bpf.c` file below `src`, generates a skeleton for it, and exports the headers your IDE needs.
-* **Loading** — `Program::build` opens and loads a generated skeleton in one step.
-* **Tracing** — the macros of [`xbpf.h`](xbpf/include/xbpf.h) emit diagnostics from eBPF that surface as ordinary [tracing](https://crates.io/crates/tracing) events. See [docs/tracing.md](docs/tracing.md).
+## Why
 
-Compiling eBPF programs requires `bpftool` on your `PATH`, and loading them requires privileges.
+xBPF is comparable to [aya](https://aya-rs.dev/), but requires you to write your eBPF code in C, rather than Rust. In my opinion, implementing eBPF with Rust makes things unnecessarily complicated. eBPF is hard because [it's verified](https://docs.kernel.org/bpf/verifier.html). Using Rust in this case might seem convenient, but does not help the kernel verify your programs. 
+
+But alternatives like [libbpf-rs](https://github.com/libbpf/libbpf-rs) are much more low level. Using it can be a pretty steep learning curve.
+
+xBPF closes this gap by building on top of [libbpf-rs](https://github.com/libbpf/libbpf-rs) to provide a more user-friendly eBPF ecosystem for Rust.
 
 ## Example
 
