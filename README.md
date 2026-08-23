@@ -27,17 +27,5 @@ But alternatives like [libbpf-rs](https://github.com/libbpf/libbpf-rs) are much 
 
 xBPF closes this gap by building on top of [libbpf-rs](https://github.com/libbpf/libbpf-rs) to provide a more user-friendly eBPF ecosystem for Rust.
 
-## Example
-
-```rust
-xbpf::include_bpf!("syscall_trace");
-
-let mut open_obj = OpenObject::new();
-let prog = Program::build(SyscallTraceSkelBuilder::default(), &mut open_obj)?;
-let _link = prog.skel.progs.trace_syscall.attach()?;
-```
-
-See [example](example) for the full program, and run it with `RUST_LOG=info cargo build && sudo -E RUST_LOG=info ./target/debug/example`. `RUST_LOG` matters at build time too, since that is when the tracing macros are compiled in or out.
-
 ## License
 This project is licensed under the [MIT license](LICENSE).
