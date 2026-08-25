@@ -5,9 +5,9 @@ members = ["xbpf", "example"]
 [workspace.package]
 license = "MIT"
 authors = [
-    "lbrndnr <mail@laurinbrandner.ch>",
+    "lerboe <mail@laurinbrandner.ch>",
 ]
-repository = "https://github.com/lbrndnr/bpf"
+repository = "https://github.com/lerboe/bpf"
 readme = "README.md"
 keywords = ["ebpf", "bpf", "libbpf", "linux"]
 description = "An ergonomic and light-weight eBPF library"
