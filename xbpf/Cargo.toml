@@ -25,6 +25,6 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 [features]
 default = ["build", "tracing"]
 build = ["dep:glob", "dep:tracing-subscriber"]
-map = ["dep:tokio"]
-tracing = ["map"]
+collections = ["dep:tokio"]
+tracing = ["collections"]
 tracing-source-loc = []

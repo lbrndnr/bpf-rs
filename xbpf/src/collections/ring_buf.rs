@@ -29,19 +29,6 @@ use tokio::sync::mpsc::{Receiver, Sender, channel, error::TrySendError};
 /// has been asked to stop.
 const POLL_TIMEOUT: Duration = Duration::from_millis(1);
 
-/// Decodes a value from a raw ring buffer record.
-///
-/// [`RingBuf`] decodes a record when it is received rather than when it is read
-/// out of the ring buffer, so implementations of this are allowed to be as
-/// expensive as they need to be.
-pub trait FromRecord: Sized {
-    /// The error returned for a record that cannot be decoded.
-    type Error;
-
-    /// Decodes `record`, the bytes of a single ring buffer record.
-    fn from_record(record: &[u8]) -> std::result::Result<Self, Self::Error>;
-}
-
 /// A reader for an eBPF ring buffer that buffers records in user space.
 ///
 /// Records are read by a dedicated thread that copies them into a bounded
@@ -130,26 +117,29 @@ impl<V> RingBuf<V> {
     }
 }
 
-impl<V: FromRecord> RingBuf<V> {
+impl<V, E> RingBuf<V>
+where
+    V: for<'a> TryFrom<&'a [u8], Error = E>,
+{
     /// Receives and decodes the next record, waiting for one to arrive.
     ///
     /// Returns `None` once the reader thread has stopped and all buffered
     /// records have been received.
-    pub async fn recv(&mut self) -> Option<std::result::Result<V, V::Error>> {
-        self.rx.recv().await.map(|r| V::from_record(&r))
+    pub async fn recv(&mut self) -> Option<std::result::Result<V, E>> {
+        self.rx.recv().await.map(|r| V::try_from(&r))
     }
 
     /// Like [`RingBuf::recv`], but blocks the current thread.
     ///
     /// # Panics
     /// Panics if called from within an asynchronous execution context.
-    pub fn blocking_recv(&mut self) -> Option<std::result::Result<V, V::Error>> {
-        self.rx.blocking_recv().map(|r| V::from_record(&r))
+    pub fn blocking_recv(&mut self) -> Option<std::result::Result<V, E>> {
+        self.rx.blocking_recv().map(|r| V::try_from(&r))
     }
 
     /// Receives and decodes the next record if one is buffered.
-    pub fn try_recv(&mut self) -> Option<std::result::Result<V, V::Error>> {
-        self.rx.try_recv().ok().map(|r| V::from_record(&r))
+    pub fn try_recv(&mut self) -> Option<std::result::Result<V, E>> {
+        self.rx.try_recv().ok().map(|r| V::try_from(&r))
     }
 }
 
@@ -213,10 +203,10 @@ mod tests {
     /// A value that is never decoded, the tests only exercise the buffering.
     struct Raw;
 
-    impl FromRecord for Raw {
+    impl TryFrom<&[u8]> for Raw {
         type Error = ();
 
-        fn from_record(_record: &[u8]) -> std::result::Result<Self, Self::Error> {
+        fn try_from(_event: &[u8]) -> std::result::Result<Self, Self::Error> {
             Ok(Raw)
         }
     }

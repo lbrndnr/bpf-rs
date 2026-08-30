@@ -138,8 +138,8 @@ pub use obj::OpenObject;
 mod prog;
 pub use prog::Program;
 
-#[cfg(feature = "map")]
-pub mod map;
+#[cfg(feature = "collections")]
+pub mod collections;
 
 #[cfg(feature = "tracing")]
 pub mod event;

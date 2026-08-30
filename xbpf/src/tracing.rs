@@ -44,9 +44,9 @@
 //!
 //! [`tracing`]: https://github.com/tokio-rs/tracing
 use crate::{
+    collections::RingBuf,
     event::{CallsiteKey, Event, Kind},
     libbpf::{self, MapCore, MapHandle, PrintLevel},
-    map::RingBuf,
 };
 use std::{
     cell::RefCell,
