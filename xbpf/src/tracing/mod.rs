@@ -45,9 +45,9 @@
 //! [`tracing`]: https://github.com/tokio-rs/tracing
 use crate::{
     collections::RingBuf,
-    event::{CallsiteKey, Event, Kind},
     libbpf::{self, MapCore, MapHandle, PrintLevel},
 };
+pub use event::{CallsiteKey, Event, Kind};
 use std::{
     cell::RefCell,
     collections::{HashMap, VecDeque},
@@ -55,6 +55,8 @@ use std::{
     thread::{self},
 };
 use tracing::{self, metadata::Metadata, span::EnteredSpan};
+
+mod event;
 
 /// The [`tracing`] target every event from an eBPF program is emitted under,
 /// so that `RUST_LOG=bpf=debug` filters them as a group.

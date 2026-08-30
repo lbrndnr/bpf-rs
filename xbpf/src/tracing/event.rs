@@ -103,7 +103,7 @@ pub enum Kind {
 ///
 /// ```
 /// use tracing::Level;
-/// use xbpf::event::{Event, Kind};
+/// use xbpf::tracing::{Event, Kind};
 ///
 /// let mut buf = vec![0u8; 264];
 /// buf[0] = 3; // INFO

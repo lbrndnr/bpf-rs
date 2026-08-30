@@ -142,9 +142,6 @@ pub use prog::Program;
 pub mod collections;
 
 #[cfg(feature = "tracing")]
-pub mod event;
-
-#[cfg(feature = "tracing")]
 pub mod tracing;
 
 #[cfg(feature = "build")]
