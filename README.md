@@ -19,6 +19,9 @@ xBPF (eXtended BPF) is a high-level eBPF library for Rust. It aims at providing 
 
 eBPF can be a bit of a footgun: Building, loading, and managing eBPF programs is not necessarily difficult, but can fail in many spectacular ways. xBPF addresses this with convenient helper functions that avoid common pitfalls, and reduce boiler plate code.
 
+> [!NOTE]
+> xBPF is still very much WIP. Feel free to open issues if you find bugs or have a feature request!
+
 ## Why
 
 xBPF is comparable to [aya](https://aya-rs.dev/), but requires you to write your eBPF code in C, rather than Rust. In my opinion, implementing eBPF with Rust makes things unnecessarily complicated. eBPF is hard because [it's verified](https://docs.kernel.org/bpf/verifier.html). Using Rust in this case might seem convenient, but does not help the kernel verify your programs. 
